@@ -1,0 +1,41 @@
+{
+  "id": "/",
+  "name": "قَلَم — القراءة الذكية للغة العربية",
+  "short_name": "قَلَم",
+  "description": "تطبيق تفاعلي لتعلّم العربية عبر القراءة بالتشكيل الجزئي الذكي، الترجمة السياقية، والبطاقات التعليمية.",
+  "dir": "rtl",
+  "lang": "ar",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#4C1D95",
+  "background_color": "#FDFBFC",
+  "categories": ["education", "books"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

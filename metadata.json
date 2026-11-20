@@ -1,0 +1,6 @@
+{
+  "name": "Qalam",
+  "description": "An interactive Arabic reading, contextual translation, and smart flashcard studio for learners.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

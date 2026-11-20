@@ -1,0 +1,1530 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowRight,
+  BookOpen,
+  CheckCircle2,
+  Clock,
+  Compass,
+  Crown,
+  Flame,
+  LogIn,
+  NotebookPen,
+  Plus,
+  Sprout,
+  Trash2,
+  Video,
+  X,
+} from 'lucide-react';
+import { AddLessonModal } from './components/AddLessonModal';
+import { AuthModal } from './components/AuthModal';
+import { DailyGoalCard } from './components/DailyGoalCard';
+import { LandingPage } from './components/LandingPage';
+import { LessonReader } from './components/LessonReader';
+import { Navbar } from './components/Navbar';
+import { NotesDrawer } from './components/NotesDrawer';
+import { PracticeMode } from './components/PracticeMode';
+import { ReadingHistoryView } from './components/ReadingHistoryView';
+import { VocabularyView } from './components/VocabularyView';
+import { DailyStudyLog, WeeklyVocabChart } from './components/WeeklyVocabChart';
+import { ActiveWordSelection, WordContextMenu } from './components/WordContextMenu';
+import { SAMPLE_LESSONS } from './data/lessons';
+import { useLocalStorage } from './hooks/useLocalStorage';
+import {
+  ActiveTab,
+  AuthUser,
+  Lesson,
+  NoteContextTag,
+  PracticeStatus,
+  ProficiencyLevel,
+  ReaderPreferences,
+  ReadingHistoryItem,
+  SrsRating,
+  StudyNote,
+  StudyStreak,
+  VocabCard,
+  WordAnalysis,
+} from './types/arabic';
+import { getActiveUser, logoutUser } from './utils/auth';
+import {
+  applySmartPartialTashkeel,
+  countArabicWords,
+  getArabicFontClass,
+  LEVEL_LABELS,
+  normalizeArabicWord,
+  stripTashkeel,
+} from './utils/arabic';
+
+const DEFAULT_PREFERENCES: ReaderPreferences = {
+  showTashkeel: true,
+  fontSize: 32,
+  fontStyle: 'scheherazade',
+  speechRate: 0.92,
+};
+
+function getLocalDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getYesterdayDateKey(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return getLocalDateKey(d);
+}
+
+const STARTER_VOCAB_CARDS: VocabCard[] = [
+  {
+    id: 'starter-qahwa',
+    normalizedKey: normalizeArabicWord('القهوةُ'),
+    word: 'القهوةُ',
+    wordWithTashkeel: 'القهوةُ',
+    partOfSpeech: 'Noun',
+    transliteration: 'al-qahwa',
+    englishMeaning: 'the coffee',
+    examples: [
+      {
+        arabic: 'رائحةُ القهوةِ العربيّةِ تملأُ أرجاءَ المطبخِ.',
+        english: 'The aroma of Arabic coffee fills the corners of the kitchen.',
+      },
+      {
+        arabic: 'يجتمعُ الأصدقاءُ لشربِ القهوةِ وتبادلِ الأخبارِ.',
+        english: 'Friends gather to drink coffee and exchange news.',
+      },
+    ],
+    lessonId: 'beg-morning-market',
+    lessonTitle: 'A Morning in the Old Market',
+    status: 'needs_review',
+    createdAt: 1700000000001,
+    source: 'lexicon',
+  },
+  {
+    id: 'starter-hikma',
+    normalizedKey: normalizeArabicWord('الحكمةُ'),
+    word: 'الحكمةُ',
+    wordWithTashkeel: 'الحكمةُ',
+    partOfSpeech: 'Noun',
+    transliteration: 'al-ḥikma',
+    englishMeaning: 'wisdom',
+    examples: [
+      {
+        arabic: 'تأتي الحكمةُ منَ التّأمّلِ والتّجاربِ الطّويلةِ.',
+        english: 'Wisdom comes from reflection and long experiences.',
+      },
+      {
+        arabic: 'سمّيتْ دارُ العلمِ في بغدادَ ببيْتِ الحكمةِ.',
+        english: 'The center of learning in Baghdad was named the House of Wisdom.',
+      },
+    ],
+    lessonId: 'int-house-of-wisdom',
+    lessonTitle: 'The House of Wisdom in Baghdad',
+    status: 'needs_review',
+    createdAt: 1700000000002,
+    source: 'lexicon',
+  },
+  {
+    id: 'starter-saada',
+    normalizedKey: normalizeArabicWord('السّعادةُ'),
+    word: 'السّعادةُ',
+    wordWithTashkeel: 'السّعادةُ',
+    partOfSpeech: 'Noun',
+    transliteration: 'as-saʿāda',
+    englishMeaning: 'happiness',
+    examples: [
+      {
+        arabic: 'تكمنُ السّعادةُ الحقيقيّةُ في القناعةِ والعطاءِ.',
+        english: 'True happiness lies in contentment and generosity.',
+      },
+      {
+        arabic: 'شعرتِ الطّالبةُ بالسّعادةِ عندَ استلامِ شهادتِها.',
+        english: 'The student felt happiness upon receiving her certificate.',
+      },
+    ],
+    lessonId: 'beg-family-garden',
+    lessonTitle: 'Our Family Garden',
+    status: 'learned',
+    createdAt: 1700000000003,
+    source: 'lexicon',
+  },
+];
+
+function migrateLegacyGuestStorage() {
+  if (typeof window === 'undefined') return;
+  try {
+    const pairs: Array<[string, string]> = [
+      ['qalam_vocab_cards', 'qalam_vocab_cards_v2::guest-demo'],
+      ['qalam_study_streak', 'qalam_study_streak_v2::guest-demo'],
+      ['qalam_daily_study_logs', 'qalam_daily_study_logs_v2::guest-demo'],
+      ['qalam_selected_level', 'qalam_selected_level_v2::guest-demo'],
+      ['qalam_reading_history', 'qalam_reading_history_v2::guest-demo'],
+    ];
+    for (const [legacyKey, nextKey] of pairs) {
+      const legacyVal = window.localStorage.getItem(legacyKey);
+      if (legacyVal && !window.localStorage.getItem(nextKey)) {
+        window.localStorage.setItem(nextKey, legacyVal);
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+migrateLegacyGuestStorage();
+
+function migrateGuestDataToAccount(targetUserId: string) {
+  if (typeof window === 'undefined' || !targetUserId || targetUserId === 'guest-demo') return;
+  try {
+    const prefixes = [
+      'qalam_vocab_cards_v2',
+      'qalam_reading_history_v2',
+      'qalam_study_streak_v2',
+      'qalam_daily_study_logs_v2',
+      'qalam_daily_goal_v2',
+      'qalam_study_notes_v2',
+      'qalam_selected_level_v2',
+    ];
+    for (const prefix of prefixes) {
+      const guestVal = window.localStorage.getItem(`${prefix}::guest-demo`);
+      const targetKey = `${prefix}::${targetUserId}`;
+      const existingTarget = window.localStorage.getItem(targetKey);
+      const isTargetEmpty =
+        existingTarget === null || existingTarget === '[]' || existingTarget === '{}';
+      if (guestVal && guestVal !== '[]' && guestVal !== '{}' && isTargetEmpty) {
+        window.localStorage.setItem(targetKey, guestVal);
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export default function App() {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getActiveUser());
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
+
+  const sessionScope = currentUser ? currentUser.id : 'guest-demo';
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>('lessons');
+  const [activeNavSection, setActiveNavSection] = useState<
+    'home' | 'history' | 'levels' | 'vocabulary' | 'practice'
+  >('home');
+  const [selectedLevel, setSelectedLevel] = useLocalStorage<ProficiencyLevel>(
+    `qalam_selected_level_v2::${sessionScope}`,
+    'beginner'
+  );
+  const [customLessons, setCustomLessons] = useLocalStorage<Lesson[]>(
+    'qalam_custom_lessons',
+    []
+  );
+  const [vocabCards, setVocabCards] = useLocalStorage<VocabCard[]>(
+    `qalam_vocab_cards_v2::${sessionScope}`,
+    STARTER_VOCAB_CARDS
+  );
+  const [readingHistory, setReadingHistory] = useLocalStorage<ReadingHistoryItem[]>(
+    `qalam_reading_history_v2::${sessionScope}`,
+    []
+  );
+  const [preferences, setPreferences] = useLocalStorage<ReaderPreferences>(
+    'qalam_reader_prefs',
+    DEFAULT_PREFERENCES
+  );
+  // Persistent localStorage translation cache for 0ms repeat lookups
+  const [analysisCache, setAnalysisCache] = useLocalStorage<Record<string, WordAnalysis>>(
+    'qalam_word_cache_v2',
+    {}
+  );
+  // Daily study streak persisted per user session
+  const [studyStreak, setStudyStreak] = useLocalStorage<StudyStreak>(
+    `qalam_study_streak_v2::${sessionScope}`,
+    { count: 0, lastActivityDate: null }
+  );
+  // Daily vocabulary learning logs for weekly progress chart per user session
+  const [dailyLogs, setDailyLogs] = useLocalStorage<Record<string, DailyStudyLog>>(
+    `qalam_daily_study_logs_v2::${sessionScope}`,
+    {}
+  );
+  // Daily word target for My Daily Goal module per user session
+  const [dailyWordGoal, setDailyWordGoal] = useLocalStorage<number>(
+    `qalam_daily_goal_v2::${sessionScope}`,
+    5
+  );
+  const [studyNotes, setStudyNotes] = useLocalStorage<StudyNote[]>(
+    `qalam_study_notes_v2::${sessionScope}`,
+    []
+  );
+
+  const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
+  const [isAddLessonOpen, setIsAddLessonOpen] = useState(false);
+  const [isNotesOpen, setIsNotesOpen] = useState(false);
+  const [notesContext, setNotesContext] = useState<NoteContextTag | null>(null);
+  const [apiNotice, setApiNotice] = useState<string | null>(null);
+  const [publishNotice, setPublishNotice] = useState<{
+    lessonId: string;
+    title: string;
+    levelEn: string;
+    levelAr: string;
+  } | null>(null);
+
+  // Word Context Menu State
+  const [wordSelection, setWordSelection] = useState<ActiveWordSelection | null>(null);
+  const [popoverMode, setPopoverMode] = useState<'menu' | 'translation'>('menu');
+  const [wordAnalysis, setWordAnalysis] = useState<WordAnalysis | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [savingVocab, setSavingVocab] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
+
+  // In-flight deduplication map for background prefetching
+  const inFlightRequests = useRef<Map<string, Promise<WordAnalysis>>>(new Map());
+  const levelsSectionRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const handleTtsNotice = (event: Event) => {
+      const custom = event as CustomEvent<{ message?: string }>;
+      if (custom.detail?.message) {
+        setApiNotice(custom.detail.message);
+      }
+    };
+    window.addEventListener('qalam:tts-notice', handleTtsNotice);
+    return () => window.removeEventListener('qalam:tts-notice', handleTtsNotice);
+  }, []);
+
+  // Role/Auth Access Control: only signed-in non-guest users can add/manage custom content
+  const canAddContent = Boolean(currentUser && !currentUser.isGuest);
+
+  const allLessons = useMemo(
+    () => (canAddContent ? [...customLessons, ...SAMPLE_LESSONS] : SAMPLE_LESSONS),
+    [canAddContent, customLessons]
+  );
+
+  const filteredLessons = useMemo(
+    () => allLessons.filter((lesson) => lesson.level === selectedLevel),
+    [allLessons, selectedLevel]
+  );
+
+  const activeLesson = useMemo(
+    () => allLessons.find((l) => l.id === activeLessonId) ?? null,
+    [allLessons, activeLessonId]
+  );
+
+  const vocabStatusMap = useMemo(() => {
+    const map = new Map<string, VocabCard['status']>();
+    for (const card of vocabCards) {
+      map.set(card.normalizedKey, card.status);
+    }
+    return map;
+  }, [vocabCards]);
+
+  const learnedCount = useMemo(
+    () => vocabCards.filter((c) => c.status === 'learned').length,
+    [vocabCards]
+  );
+  const reviewCount = vocabCards.length - learnedCount;
+
+  const todayKey = getLocalDateKey();
+  const yesterdayKey = getYesterdayDateKey();
+
+  const effectiveStreakCount = useMemo(() => {
+    if (!studyStreak.lastActivityDate) return 0;
+    if (
+      studyStreak.lastActivityDate === todayKey ||
+      studyStreak.lastActivityDate === yesterdayKey
+    ) {
+      return studyStreak.count;
+    }
+    return 0;
+  }, [studyStreak, todayKey, yesterdayKey]);
+
+  const studiedToday = studyStreak.lastActivityDate === todayKey && effectiveStreakCount > 0;
+
+  const recordStudyActivity = useCallback(
+    (actionType?: 'added' | 'reviewed' | 'translated') => {
+      const today = getLocalDateKey();
+      const yesterday = getYesterdayDateKey();
+      setStudyStreak((prev) => {
+        if (prev.lastActivityDate === today) {
+          return prev.count > 0 ? prev : { count: 1, lastActivityDate: today };
+        }
+        if (prev.lastActivityDate === yesterday) {
+          return { count: prev.count + 1, lastActivityDate: today };
+        }
+        return { count: 1, lastActivityDate: today };
+      });
+
+      if (actionType) {
+        setDailyLogs((prev) => {
+          const current = prev[today] ?? { added: 0, reviewed: 0, translated: 0 };
+          return {
+            ...prev,
+            [today]: {
+              ...current,
+              [actionType]: current[actionType] + 1,
+            },
+          };
+        });
+      }
+    },
+    [setStudyStreak, setDailyLogs]
+  );
+
+  const levelInfo = LEVEL_LABELS[selectedLevel];
+
+  const handleSelectLevel = (level: ProficiencyLevel) => {
+    setSelectedLevel(level);
+    setActiveLessonId(null);
+    setWordSelection(null);
+  };
+
+  const handleSelectTab = (tab: ActiveTab) => {
+    setActiveTab(tab);
+    setActiveNavSection(tab === 'lessons' ? 'home' : tab);
+    setWordSelection(null);
+  };
+
+  const handleSelectHome = () => {
+    setActiveTab('lessons');
+    setActiveNavSection('home');
+    setActiveLessonId(null);
+    setWordSelection(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleSelectLevelsNav = () => {
+    setActiveTab('lessons');
+    setActiveNavSection('levels');
+    setActiveLessonId(null);
+    setWordSelection(null);
+    window.requestAnimationFrame(() => {
+      levelsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
+  const handleUpdateReadingHistory = useCallback(
+    (item: Partial<ReadingHistoryItem> & { lessonId: string }) => {
+      setReadingHistory((prev) => {
+        const existingIndex = prev.findIndex((h) => h.lessonId === item.lessonId);
+        const targetLesson = allLessons.find((l) => l.id === item.lessonId);
+        const now = Date.now();
+
+        if (existingIndex >= 0) {
+          const existing = prev[existingIndex];
+          const updated: ReadingHistoryItem = {
+            ...existing,
+            ...item,
+            titleEn: item.titleEn || existing.titleEn || targetLesson?.titleEn || 'Lesson',
+            titleAr: item.titleAr || existing.titleAr || targetLesson?.titleAr || '',
+            level: item.level || existing.level || targetLesson?.level || 'beginner',
+            lastReadAt: Math.max(existing.lastReadAt, item.lastReadAt ?? now),
+            progressPercent: Math.max(existing.progressPercent, item.progressPercent ?? 0),
+            wordsInteracted: Math.max(existing.wordsInteracted, item.wordsInteracted ?? 0),
+            totalWords: item.totalWords || existing.totalWords || 1,
+            audioListened: Boolean(existing.audioListened || item.audioListened),
+            quizCompleted: Boolean(existing.quizCompleted || item.quizCompleted),
+            quizScore: item.quizScore ?? existing.quizScore,
+          };
+          const next = [...prev];
+          next.splice(existingIndex, 1);
+          return [updated, ...next];
+        }
+
+        const newItem: ReadingHistoryItem = {
+          lessonId: item.lessonId,
+          titleEn: item.titleEn || targetLesson?.titleEn || 'Lesson',
+          titleAr: item.titleAr || targetLesson?.titleAr || '',
+          level: item.level || targetLesson?.level || 'beginner',
+          lastReadAt: item.lastReadAt ?? now,
+          progressPercent: item.progressPercent ?? 10,
+          wordsInteracted: item.wordsInteracted ?? 0,
+          totalWords: item.totalWords || 1,
+          audioListened: Boolean(item.audioListened),
+          quizCompleted: Boolean(item.quizCompleted),
+          quizScore: item.quizScore,
+        };
+        return [newItem, ...prev];
+      });
+    },
+    [allLessons, setReadingHistory]
+  );
+
+  const handleClearReadingHistory = useCallback(() => {
+    setReadingHistory([]);
+  }, [setReadingHistory]);
+
+  const handleRemoveReadingHistoryItem = useCallback(
+    (lessonId: string) => {
+      setReadingHistory((prev) => prev.filter((item) => item.lessonId !== lessonId));
+    },
+    [setReadingHistory]
+  );
+
+  const handleOpenLesson = (lessonId: string) => {
+    recordStudyActivity();
+    setActiveLessonId(lessonId);
+    setWordSelection(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleAddLesson = (lesson: Lesson) => {
+    if (!canAddContent) return;
+    setCustomLessons((prev) => [lesson, ...prev]);
+    setSelectedLevel(lesson.level);
+    setActiveTab('lessons');
+    setActiveNavSection('levels');
+    setActiveLessonId(null);
+    setPublishNotice({
+      lessonId: lesson.id,
+      title: lesson.titleAr || lesson.titleEn,
+      levelEn: LEVEL_LABELS[lesson.level].en,
+      levelAr: LEVEL_LABELS[lesson.level].ar,
+    });
+  };
+
+  const handleOpenAuth = (mode: 'login' | 'register' = 'login') => {
+    setAuthModalMode(mode);
+    setIsAuthModalOpen(true);
+  };
+
+  const handleLogout = () => {
+    logoutUser();
+    setCurrentUser(null);
+    setActiveLessonId(null);
+    setActiveTab('lessons');
+    setActiveNavSection('home');
+    setIsAddLessonOpen(false);
+    setIsNotesOpen(false);
+    setPublishNotice(null);
+    setWordSelection(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDeleteCustomLesson = (lessonId: string) => {
+    setCustomLessons((prev) => prev.filter((l) => l.id !== lessonId));
+    if (activeLessonId === lessonId) {
+      setActiveLessonId(null);
+    }
+  };
+
+  const getCacheKey = (word: string, contextSentence: string) =>
+    `v2::${normalizeArabicWord(word)}::${contextSentence.slice(0, 80)}`;
+
+  const fetchWordAnalysis = async (selection: ActiveWordSelection): Promise<WordAnalysis> => {
+    const cacheKey = getCacheKey(selection.word, selection.contextSentence);
+
+    // 1. Instant 0ms localStorage cache hit
+    const cached = analysisCache[cacheKey];
+    if (cached) {
+      return cached;
+    }
+
+    // 2. Reuse in-flight prefetch request if user opened menu milliseconds earlier
+    const existingPromise = inFlightRequests.current.get(cacheKey);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const requestPromise = (async () => {
+      const response = await fetch('/api/word/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          word: selection.word,
+          contextSentence: selection.contextSentence,
+          level: activeLesson?.level ?? selectedLevel,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        if (data?.fallback) {
+          setApiNotice(data.error || 'Using built-in Arabic lexicon.');
+          return data.fallback as WordAnalysis;
+        }
+        throw new Error(data?.error || 'Could not analyze word.');
+      }
+
+      const analysis = data as WordAnalysis;
+      if (analysis.notice) {
+        setApiNotice(analysis.notice);
+      }
+
+      setAnalysisCache((prev) => ({ ...prev, [cacheKey]: analysis }));
+      return analysis;
+    })();
+
+    inFlightRequests.current.set(cacheKey, requestPromise);
+    try {
+      return await requestPromise;
+    } finally {
+      inFlightRequests.current.delete(cacheKey);
+    }
+  };
+
+  const handleSelectWord = (selection: ActiveWordSelection) => {
+    setWordSelection(selection);
+    setPopoverMode('menu');
+    setAnalysisError(null);
+    setJustSaved(false);
+
+    const cacheKey = getCacheKey(selection.word, selection.contextSentence);
+    const cached = analysisCache[cacheKey];
+    if (cached) {
+      setWordAnalysis(cached);
+    } else {
+      setWordAnalysis(null);
+      // Speculative prefetch while user chooses Translate or Add to Vocabulary
+      void fetchWordAnalysis(selection).catch(() => {
+        // Handled explicitly if user triggers action
+      });
+    }
+  };
+
+  const handleTranslateWord = async () => {
+    if (!wordSelection) return;
+    recordStudyActivity('translated');
+    setPopoverMode('translation');
+    setAnalysisError(null);
+
+    const cacheKey = getCacheKey(wordSelection.word, wordSelection.contextSentence);
+    const cached = analysisCache[cacheKey];
+    if (cached) {
+      setWordAnalysis(cached);
+      setAnalysisLoading(false);
+      return;
+    }
+
+    setAnalysisLoading(true);
+    try {
+      const result = await fetchWordAnalysis(wordSelection);
+      setWordAnalysis(result);
+    } catch (err) {
+      setAnalysisError(
+        err instanceof Error ? err.message : 'Unable to translate this word.'
+      );
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+
+  const handleAddToVocabulary = async () => {
+    if (!wordSelection) return;
+    recordStudyActivity();
+    const normalizedKey = normalizeArabicWord(wordSelection.word);
+
+    if (vocabStatusMap.has(normalizedKey)) {
+      setJustSaved(true);
+      if (!wordAnalysis) {
+        const existing = vocabCards.find((c) => c.normalizedKey === normalizedKey);
+        if (existing) {
+          setWordAnalysis(existing);
+        }
+      }
+      setPopoverMode('translation');
+      return;
+    }
+
+    setSavingVocab(true);
+    setAnalysisError(null);
+    try {
+      const result = wordAnalysis ?? (await fetchWordAnalysis(wordSelection));
+      setWordAnalysis(result);
+
+      const newCard: VocabCard = {
+        ...result,
+        id: `vocab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        normalizedKey,
+        lessonId: activeLesson?.id,
+        lessonTitle: activeLesson?.titleEn,
+        status: 'needs_review',
+        createdAt: Date.now(),
+      };
+
+      setVocabCards((prev) => [newCard, ...prev]);
+      recordStudyActivity('added');
+      setJustSaved(true);
+      setPopoverMode('translation');
+    } catch (err) {
+      setAnalysisError(
+        err instanceof Error ? err.message : 'Failed to generate flashcard.'
+      );
+    } finally {
+      setSavingVocab(false);
+    }
+  };
+
+  const handleUpdateVocabStatus = (id: string, status: PracticeStatus) => {
+    recordStudyActivity('reviewed');
+    setVocabCards((prev) =>
+      prev.map((card) =>
+        card.id === id ? { ...card, status, lastReviewedAt: Date.now() } : card
+      )
+    );
+  };
+
+  const handleRateVocabCard = (id: string, rating: SrsRating) => {
+    recordStudyActivity('reviewed');
+    const now = Date.now();
+    const intervalDays = rating === 'hard' ? 0 : rating === 'good' ? 2 : 7;
+    const nextReviewAt =
+      rating === 'hard' ? now : now + intervalDays * 24 * 60 * 60 * 1000;
+    const nextStatus: PracticeStatus =
+      rating === 'hard' ? 'needs_review' : 'learned';
+
+    setVocabCards((prev) =>
+      prev.map((card) =>
+        card.id === id
+          ? {
+              ...card,
+              status: nextStatus,
+              srsRating: rating,
+              intervalDays,
+              nextReviewAt,
+              lastReviewedAt: now,
+              reviewCount: (card.reviewCount ?? 0) + 1,
+            }
+          : card
+      )
+    );
+  };
+
+  const handleDeleteVocabCard = (id: string) => {
+    setVocabCards((prev) => prev.filter((card) => card.id !== id));
+  };
+
+  const getDefaultNoteContext = useCallback((): NoteContextTag | null => {
+    if (activeTab === 'lessons' && activeLesson) {
+      return {
+        type: 'lesson',
+        label: activeLesson.titleAr || activeLesson.titleEn,
+        refId: activeLesson.id,
+      };
+    }
+    if (activeTab === 'vocabulary' || activeTab === 'practice') {
+      return {
+        type: 'vocab',
+        label: 'مفرداتي · My Vocabulary',
+      };
+    }
+    return null;
+  }, [activeLesson, activeTab]);
+
+  const handleOpenNotes = useCallback(
+    (explicitContext?: NoteContextTag) => {
+      setNotesContext(explicitContext ?? getDefaultNoteContext());
+      setIsNotesOpen(true);
+    },
+    [getDefaultNoteContext]
+  );
+
+  const handleSaveNote = useCallback(
+    (input: { id?: string; title?: string; body: string; context?: NoteContextTag }) => {
+      const now = Date.now();
+      setStudyNotes((prev) => {
+        if (input.id) {
+          return prev.map((note) =>
+            note.id === input.id
+              ? {
+                  ...note,
+                  title: input.title,
+                  body: input.body,
+                  context: input.context,
+                  updatedAt: now,
+                }
+              : note
+          );
+        }
+        const nextNote: StudyNote = {
+          id: `note-${now}-${Math.random().toString(36).slice(2, 7)}`,
+          title: input.title,
+          body: input.body,
+          context: input.context,
+          createdAt: now,
+          updatedAt: now,
+        };
+        return [nextNote, ...prev];
+      });
+    },
+    [setStudyNotes]
+  );
+
+  const handleDeleteNote = useCallback(
+    (id: string) => {
+      setStudyNotes((prev) => prev.filter((note) => note.id !== id));
+    },
+    [setStudyNotes]
+  );
+
+  const activeWordKey = wordSelection ? normalizeArabicWord(wordSelection.word) : null;
+  const isCurrentWordSaved = activeWordKey ? vocabStatusMap.has(activeWordKey) : false;
+
+  return (
+    <div className="min-h-screen flex flex-col bg-[#FDFBFC] text-[#241734]">
+      <Navbar
+        activeTab={activeTab}
+        activeNavSection={activeNavSection}
+        onSelectHome={handleSelectHome}
+        onSelectHistory={() => handleSelectTab('history')}
+        onSelectLevels={handleSelectLevelsNav}
+        onSelectTab={handleSelectTab}
+        vocabCount={vocabCards.length}
+        historyCount={readingHistory.length}
+        currentUser={currentUser}
+        canAddContent={canAddContent}
+        onOpenAuth={handleOpenAuth}
+        onOpenAddLesson={() => {
+          if (canAddContent) setIsAddLessonOpen(true);
+        }}
+        onLogout={handleLogout}
+        notesCount={studyNotes.length}
+        onOpenNotes={() => handleOpenNotes()}
+      />
+
+      {!currentUser ? (
+        <>
+          <LandingPage onGetStarted={(mode) => handleOpenAuth(mode)} />
+
+          <footer className="border-t border-[#ECE8EF] bg-white/95 py-6">
+            <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-xs text-zinc-500 sm:px-6 lg:px-8">
+              <div className="flex items-center gap-2">
+                <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-lg font-bold text-[#4C1D95]">
+                  قَلَم
+                </span>
+                <span>Qalam — Contextual Arabic Reading &amp; Smart Flashcard Studio</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => handleOpenAuth('login')}
+                  className="font-semibold text-[#4C1D95] hover:underline cursor-pointer"
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAuth('register')}
+                  className="font-semibold text-[#E11D48] hover:underline cursor-pointer"
+                >
+                  Create Free Account
+                </button>
+              </div>
+            </div>
+          </footer>
+
+          <AuthModal
+            isOpen={isAuthModalOpen}
+            initialMode={authModalMode}
+            onClose={() => setIsAuthModalOpen(false)}
+            onAuthenticated={(user) => {
+              migrateGuestDataToAccount(user.id);
+              setCurrentUser(user);
+              setActiveTab('lessons');
+              setActiveNavSection('home');
+              setActiveLessonId(null);
+              setWordSelection(null);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          />
+        </>
+      ) : (
+        <>
+          {/* Friendly Non-Blocking API Notice Banner */}
+          {apiNotice && (
+            <div className="border-b border-rose-200 bg-rose-50/90">
+              <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-2.5 text-xs text-rose-950 sm:px-6 lg:px-8">
+                <div className="flex items-center gap-2 min-w-0">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-[#E11D48]" aria-hidden="true" />
+                  <span dir="auto" className="leading-relaxed">{apiNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setApiNotice(null)}
+                  aria-label="Dismiss notification"
+                  className="rounded-md p-1 text-[#E11D48] hover:bg-rose-100 cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+        {activeTab === 'lessons' && (
+          <>
+            {activeLesson ? (
+              <LessonReader
+                lesson={activeLesson}
+                preferences={preferences}
+                onUpdatePreferences={setPreferences}
+                vocabStatusMap={vocabStatusMap}
+                activeWordKey={activeWordKey}
+                onSelectWord={handleSelectWord}
+                onBackToList={() => {
+                  setActiveLessonId(null);
+                  setWordSelection(null);
+                }}
+                onUpdateReadingHistory={handleUpdateReadingHistory}
+                notesCount={studyNotes.length}
+                onOpenNotes={(ctx) => handleOpenNotes(ctx)}
+              />
+            ) : (
+              <div className="space-y-10">
+                {/* Compact, Light, Welcoming Hero Banner */}
+                <section className="relative overflow-hidden rounded-2xl border border-[#ECE8EF] bg-white shadow-sm">
+                  <div className="islamic-geo-pattern-light pointer-events-none absolute inset-0 opacity-80" />
+                  <div className="pointer-events-none absolute -top-24 -right-24 h-64 w-64 rounded-full bg-[#F43F5E]/10 blur-3xl" />
+                  <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-[#4C1D95]/10 blur-3xl" />
+
+                  <div className="relative mx-auto max-w-3xl px-6 py-10 sm:px-10 sm:py-12 text-center space-y-5">
+                    <div className="space-y-3">
+                      <h1
+                        dir="rtl"
+                        lang="ar"
+                        className="font-arabic-scheherazade text-4xl sm:text-5xl font-bold text-[#241734] leading-[1.55]"
+                      >
+                        اقرأ، استمع، تدرّب، وطوّر لغتك!
+                      </h1>
+
+
+
+                      <p className="mx-auto max-w-xl text-xs sm:text-sm italic text-zinc-500 leading-relaxed pt-1">
+                        Improve your Arabic through level-based reading, audio listening, pronunciation practice, and instant word translations. Build your vocabulary and develop your language skills in context.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleSelectLevelsNav}
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#4C1D95] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-[#581C87] shadow-sm transition-colors cursor-pointer"
+                      >
+                        <span>Explore Levels</span>
+                        <ArrowDown className="h-3.5 w-3.5 text-rose-200" aria-hidden="true" />
+                      </button>
+
+                      {canAddContent && (
+                        <button
+                          type="button"
+                          onClick={() => setIsAddLessonOpen(true)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-[#E11D48] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-[#BE123C] shadow-sm transition-colors cursor-pointer"
+                        >
+                          <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
+                          <span>إضافة نص جديد (Add New Text)</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenNotes()}
+                        className="inline-flex items-center gap-2 rounded-xl border border-purple-200 bg-white px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#4C1D95] hover:bg-purple-50 shadow-sm transition-colors cursor-pointer"
+                      >
+                        <NotebookPen className="h-4 w-4 shrink-0 text-[#E11D48]" aria-hidden="true" />
+                        <span>ملاحظاتي · My Notes</span>
+                        {studyNotes.length > 0 && (
+                          <span className="font-mono text-xs font-bold tabular-nums text-[#E11D48]">
+                            ({studyNotes.length})
+                          </span>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Subtle Compact Stats Strip */}
+                    <div className="mx-auto flex flex-wrap items-center justify-center gap-6 border-t border-[#ECE8EF] pt-5 text-xs sm:text-sm">
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-mono text-xl font-bold tabular-nums text-[#E11D48]">
+                          {learnedCount}
+                        </span>
+                        <span className="text-zinc-500 font-medium">Words Learned</span>
+                      </div>
+                      <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-mono text-xl font-bold tabular-nums text-[#4C1D95]">
+                          {allLessons.length}
+                        </span>
+                        <span className="text-zinc-500 font-medium">Lessons Available</span>
+                      </div>
+                      <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
+                      <div className="flex items-baseline gap-2">
+                        <span className="font-mono text-xl font-bold tabular-nums text-[#581C87]">
+                          {effectiveStreakCount}
+                        </span>
+                        <span className="text-zinc-500 font-medium">Day Streak</span>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Harmonious Color-Coded Level Cards (Warm Sunset Progression) */}
+                <section
+                  id="levels-section"
+                  ref={levelsSectionRef}
+                  aria-label="Select proficiency level"
+                  className="scroll-mt-20 space-y-4"
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-baseline gap-2.5">
+                      <h2 className="font-display text-xl sm:text-2xl font-bold text-[#241734]">
+                        Choose Your Level
+                      </h2>
+                      <span
+                        dir="rtl"
+                        lang="ar"
+                        className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]"
+                      >
+                        المستويات
+                      </span>
+                    </div>
+                    <span className="text-xs text-zinc-500">
+                      Select a track to filter reading passages
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+                    {([
+                      {
+                        level: 'beginner' as ProficiencyLevel,
+                        Icon: Sprout,
+                        cardBg: 'from-rose-50/75 via-white to-pink-50/45',
+                        glowOrb: 'bg-rose-300/25',
+                        activeBorder:
+                          'border-rose-500 ring-2 ring-rose-500/20 shadow-md',
+                        idleBorder:
+                          'border-[#ECE8EF] hover:border-rose-400/70 hover:shadow-sm',
+                        iconBox:
+                          'bg-gradient-to-br from-rose-500 to-pink-600 text-white ring-4 ring-rose-100',
+                        titleColor: 'text-[#241734]',
+                        accentText: 'text-rose-600',
+                      },
+                      {
+                        level: 'intermediate' as ProficiencyLevel,
+                        Icon: Compass,
+                        cardBg: 'from-fuchsia-50/75 via-white to-purple-50/45',
+                        glowOrb: 'bg-fuchsia-300/25',
+                        activeBorder:
+                          'border-fuchsia-700 ring-2 ring-fuchsia-700/20 shadow-md',
+                        idleBorder:
+                          'border-[#ECE8EF] hover:border-fuchsia-600/60 hover:shadow-sm',
+                        iconBox:
+                          'bg-gradient-to-br from-fuchsia-700 to-purple-800 text-white ring-4 ring-fuchsia-100',
+                        titleColor: 'text-[#241734]',
+                        accentText: 'text-fuchsia-800',
+                      },
+                      {
+                        level: 'advanced' as ProficiencyLevel,
+                        Icon: Crown,
+                        cardBg: 'from-purple-50/75 via-white to-indigo-50/50',
+                        glowOrb: 'bg-purple-400/20',
+                        activeBorder:
+                          'border-purple-900 ring-2 ring-purple-900/20 shadow-md',
+                        idleBorder:
+                          'border-[#ECE8EF] hover:border-purple-800/60 hover:shadow-sm',
+                        iconBox:
+                          'bg-gradient-to-br from-purple-900 to-indigo-950 text-white ring-4 ring-purple-100',
+                        titleColor: 'text-[#241734]',
+                        accentText: 'text-purple-900',
+                      },
+                    ]).map((cfg) => {
+                      const meta = LEVEL_LABELS[cfg.level];
+                      const active = selectedLevel === cfg.level;
+                      const count = allLessons.filter((l) => l.level === cfg.level).length;
+                      const IconComponent = cfg.Icon;
+
+                      return (
+                        <button
+                          key={cfg.level}
+                          type="button"
+                          onClick={() => handleSelectLevel(cfg.level)}
+                          aria-pressed={active}
+                          className={`group relative overflow-hidden flex flex-col justify-between rounded-2xl border bg-gradient-to-br ${cfg.cardBg} p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E11D48] ${
+                            active ? cfg.activeBorder : cfg.idleBorder
+                          }`}
+                        >
+                          <div
+                            className={`pointer-events-none -right-8 -top-8 absolute h-28 w-28 rounded-full ${cfg.glowOrb} blur-2xl transition-opacity duration-200 group-hover:opacity-100 opacity-70`}
+                          />
+
+                          <div className="relative flex items-start justify-between gap-3 w-full">
+                            <div
+                              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl shadow-sm transition-transform duration-200 group-hover:scale-105 ${cfg.iconBox}`}
+                            >
+                              <IconComponent className="h-5 w-5" aria-hidden="true" />
+                            </div>
+
+                            <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
+                              <span className={`font-semibold ${cfg.accentText}`}>
+                                {count} {count === 1 ? 'Lesson' : 'Lessons'}
+                              </span>
+                              {active && (
+                                <CheckCircle2
+                                  className={`h-4 w-4 ${cfg.accentText}`}
+                                  aria-label="Selected"
+                                />
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="relative mt-5 space-y-2 w-full">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <h3 className={`font-display text-xl font-bold ${cfg.titleColor}`}>
+                                {meta.en}
+                              </h3>
+                              <span
+                                dir="rtl"
+                                lang="ar"
+                                className={`font-arabic-scheherazade text-2xl font-bold ${cfg.accentText}`}
+                              >
+                                {meta.ar}
+                              </span>
+                            </div>
+                            <p
+                              dir="rtl"
+                              lang="ar"
+                              className="font-arabic-scheherazade text-lg text-zinc-700 leading-relaxed text-right"
+                            >
+                              {meta.summaryAr}
+                            </p>
+                          </div>
+
+                          <div className="relative mt-4 pt-3 border-t border-[#ECE8EF]/80 flex items-center justify-between w-full text-xs font-semibold">
+                            <span className={active ? cfg.accentText : 'text-zinc-500'}>
+                              {active ? 'Active Track' : 'Select Level'}
+                            </span>
+                            <ArrowRight
+                              className={`h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-1 ${
+                                active ? cfg.accentText : 'text-zinc-400'
+                              }`}
+                              aria-hidden="true"
+                            />
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* Learner Study Overview: My Daily Goal + Study Metrics */}
+                <section
+                  aria-label="Study progress overview"
+                  className="grid grid-cols-1 gap-5 lg:grid-cols-12 items-stretch"
+                >
+                  <div className="lg:col-span-5 flex flex-col [&>section]:flex-1">
+                    <DailyGoalCard
+                      dailyGoal={dailyWordGoal}
+                      onChangeDailyGoal={setDailyWordGoal}
+                      vocabCards={vocabCards}
+                      todayLog={dailyLogs[todayKey]}
+                      todayKey={todayKey}
+                    />
+                  </div>
+
+                  <div className="lg:col-span-7 flex flex-col justify-between gap-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 flex-1">
+                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-medium text-zinc-500">Daily Streak</p>
+                          <div className="mt-1 flex items-baseline gap-1.5">
+                            <span className="font-mono text-2xl font-bold tabular-nums text-[#241734]">
+                              {effectiveStreakCount}
+                            </span>
+                            <span className="text-xs font-medium text-zinc-600">
+                              {effectiveStreakCount === 1 ? 'day' : 'days'}
+                            </span>
+                          </div>
+                          <p
+                            className={`mt-0.5 text-[11px] font-medium ${
+                              studiedToday ? 'text-[#E11D48]' : 'text-zinc-500'
+                            }`}
+                          >
+                            {studiedToday
+                              ? 'Studied today'
+                              : effectiveStreakCount > 0
+                                ? 'Study today to keep streak'
+                                : 'Open a lesson to start'}
+                          </p>
+                        </div>
+                        <div
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                            studiedToday
+                              ? 'bg-rose-50 text-[#E11D48]'
+                              : 'bg-[#F7F4F9] text-zinc-600'
+                          }`}
+                          aria-hidden="true"
+                        >
+                          <Flame className="h-5 w-5" />
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm flex flex-col justify-center">
+                        <p className="text-xs font-medium text-zinc-500">Current Tier</p>
+                        <p className="mt-1 font-display text-lg font-bold text-[#241734]">
+                          {levelInfo.en}{' '}
+                          <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-xl text-[#4C1D95]">
+                            · {levelInfo.ar}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm">
+                        <p className="text-xs font-medium text-zinc-500">Saved Words</p>
+                        <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#241734]">
+                          {vocabCards.length}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm">
+                        <p className="text-xs font-medium text-zinc-500">Learned</p>
+                        <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#4C1D95]">
+                          {learnedCount}
+                        </p>
+                      </div>
+
+                      <div className="col-span-2 sm:col-span-1 rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-medium text-zinc-500">Needs Review</p>
+                          <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#E11D48]">
+                            {reviewCount}
+                          </p>
+                        </div>
+                        {vocabCards.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleSelectTab('practice')}
+                            className="rounded-xl bg-[#E11D48] px-3 py-2 text-xs font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer whitespace-nowrap shadow-sm"
+                          >
+                            Practice
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+
+
+                {/* Filtered Lessons List */}
+                <section className="space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#ECE8EF] pb-3">
+                    <div className="flex items-baseline gap-3">
+                      <h2 className="font-display text-2xl font-bold text-[#241734]">
+                        {levelInfo.en} Lessons
+                      </h2>
+                      <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]">
+                        دروسُ المستوى {levelInfo.ar}
+                      </span>
+                      <span className="font-mono text-xs tabular-nums text-zinc-500">
+                        ({filteredLessons.length})
+                      </span>
+                    </div>
+
+                    {canAddContent && (
+                      <button
+                        type="button"
+                        onClick={() => setIsAddLessonOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#E11D48] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#BE123C] shadow-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Plus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span>إضافة نص جديد (Add New Text)</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {publishNotice && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-xs text-rose-950">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-[#E11D48]" aria-hidden="true" />
+                        <span>
+                          Added <span className="font-bold">{publishNotice.title}</span> to{' '}
+                          <span className="font-semibold">
+                            {publishNotice.levelEn} ({publishNotice.levelAr})
+                          </span>
+                          .
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const id = publishNotice.lessonId;
+                            setPublishNotice(null);
+                            handleOpenLesson(id);
+                          }}
+                          className="font-semibold text-[#4C1D95] hover:underline cursor-pointer"
+                        >
+                          Open Reader
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPublishNotice(null)}
+                          aria-label="Dismiss added notice"
+                          className="text-[#E11D48] hover:text-rose-950 cursor-pointer"
+                        >
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    {filteredLessons.map((lesson) => {
+                      const words = countArabicWords(lesson.textAr);
+                      const firstLine = lesson.textAr.split('\n')[0]?.slice(0, 145) ?? '';
+                      const readerFontClass = getArabicFontClass(preferences.fontStyle);
+
+                      return (
+                        <article
+                          key={lesson.id}
+                          className="group flex flex-col justify-between rounded-2xl border border-[#ECE8EF] bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:border-rose-300 hover:shadow-md"
+                        >
+                          <div className="space-y-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#F7F4F9] text-[#E11D48] border border-[#ECE8EF]">
+                                  {lesson.contentType !== 'text' && lesson.youtubeUrl ? (
+                                    <Video className="h-5 w-5" aria-hidden="true" />
+                                  ) : (
+                                    <BookOpen className="h-5 w-5" aria-hidden="true" />
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500 font-mono tabular-nums">
+                                  <span className="inline-flex items-center gap-1">
+                                    <Clock className="h-3 w-3 text-zinc-400" aria-hidden="true" />
+                                    <span>{lesson.readingTimeMinutes} min</span>
+                                  </span>
+                                  {words > 0 && (
+                                    <>
+                                      <span aria-hidden="true">·</span>
+                                      <span>{words} words</span>
+                                    </>
+                                  )}
+                                  {lesson.contentType !== 'text' && lesson.youtubeUrl && (
+                                    <>
+                                      <span aria-hidden="true">·</span>
+                                      <span className="inline-flex items-center gap-1 text-[#E11D48] font-medium">
+                                        <Video className="h-3 w-3" aria-hidden="true" />
+                                        <span>Video</span>
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {lesson.isCustom && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCustomLesson(lesson.id)}
+                                  aria-label={`Delete custom lesson ${lesson.titleEn}`}
+                                  className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-rose-700 cursor-pointer"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <h3
+                                dir="rtl"
+                                lang="ar"
+                                className={`${readerFontClass} text-2xl sm:text-3xl font-bold text-[#4C1D95] text-right leading-[1.9]`}
+                              >
+                                {applySmartPartialTashkeel(lesson.titleAr)}
+                              </h3>
+                              {stripTashkeel(lesson.titleEn).trim() !==
+                                stripTashkeel(lesson.titleAr).trim() && (
+                                <h4 className="font-display text-xl font-bold text-[#241734]">
+                                  {lesson.titleEn}
+                                </h4>
+                              )}
+                              <p className="text-sm text-zinc-600 leading-relaxed">
+                                {lesson.description}
+                              </p>
+                            </div>
+
+                            {firstLine ? (
+                              <p
+                                dir="rtl"
+                                lang="ar"
+                                className={`rounded-xl bg-[#F7F4F9] border border-[#ECE8EF] px-4 py-3 ${readerFontClass} text-lg leading-[2.15] text-[#241734] line-clamp-2`}
+                              >
+                                {applySmartPartialTashkeel(firstLine)}...
+                              </p>
+                            ) : (
+                              <div className="rounded-xl bg-[#F7F4F9] border border-[#ECE8EF] px-4 py-3 text-xs text-zinc-600 flex items-center gap-2">
+                                <Video className="h-4 w-4 text-[#E11D48] shrink-0" aria-hidden="true" />
+                                <span>YouTube video lesson — open reader to watch the embedded clip.</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="mt-6 pt-4 border-t border-[#ECE8EF] flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-zinc-500 truncate">
+                              {lesson.isCustom
+                                ? `Uploaded by ${lesson.authorName || 'Contributor'}`
+                                : 'Curated Reading'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenLesson(lesson.id)}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[#4C1D95] px-4 py-2 text-xs font-semibold text-white hover:bg-[#581C87] shadow-sm transition-colors shrink-0 cursor-pointer"
+                            >
+                              <span>Open Reader</span>
+                              <ArrowRight className="h-3.5 w-3.5 text-rose-200" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {/* Compact Weekly Vocabulary Progress Widget above footer */}
+                <div className="pt-2">
+                  <WeeklyVocabChart vocabCards={vocabCards} dailyLogs={dailyLogs} />
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {activeTab === 'history' && (
+          <ReadingHistoryView
+            history={readingHistory}
+            onOpenLesson={handleOpenLesson}
+            onClearHistory={handleClearReadingHistory}
+            onRemoveHistoryItem={handleRemoveReadingHistoryItem}
+            onGoToLessons={() => handleSelectTab('lessons')}
+          />
+        )}
+
+        {activeTab === 'vocabulary' && (
+          <div className="space-y-6">
+            {currentUser?.isGuest && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#ECE8EF] bg-white px-5 py-3.5 text-xs text-zinc-700 shadow-sm">
+                <span>
+                  You are studying in Guest Demo mode. Sign in or register to create a dedicated personal account and add custom lessons.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAuth('register')}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#E11D48] px-3.5 py-2 font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+                >
+                  <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Sign In / Register</span>
+                </button>
+              </div>
+            )}
+
+            <VocabularyView
+              cards={vocabCards}
+              speechRate={preferences.speechRate}
+              onUpdateStatus={handleUpdateVocabStatus}
+              onDeleteCard={handleDeleteVocabCard}
+              onGoToLessons={() => handleSelectTab('lessons')}
+              onStartPractice={() => handleSelectTab('practice')}
+              onRecordReview={() => recordStudyActivity('reviewed')}
+              notesCount={studyNotes.length}
+              onOpenNotes={(ctx) => handleOpenNotes(ctx)}
+            />
+          </div>
+        )}
+
+        {activeTab === 'practice' && (
+          <PracticeMode
+            cards={vocabCards}
+            speechRate={preferences.speechRate}
+            onUpdateStatus={handleUpdateVocabStatus}
+            onRateSrs={handleRateVocabCard}
+            onGoToLessons={() => handleSelectTab('lessons')}
+            onGoToVocabulary={() => handleSelectTab('vocabulary')}
+            onRecordReview={() => recordStudyActivity('reviewed')}
+            notesCount={studyNotes.length}
+            onOpenNotes={(ctx) => handleOpenNotes(ctx)}
+          />
+        )}
+      </main>
+
+      <footer className="border-t border-[#ECE8EF] bg-white/90 py-5 mt-12">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-xs text-zinc-500 sm:px-6 lg:px-8">
+          <span>Qalam — Contextual Arabic Reading &amp; Smart Flashcard Studio</span>
+          <span>Click or right-click any Arabic word in a lesson to translate or save</span>
+        </div>
+      </footer>
+
+      <WordContextMenu
+        selection={wordSelection}
+        mode={popoverMode}
+        loading={analysisLoading}
+        savingVocab={savingVocab}
+        error={analysisError}
+        analysis={wordAnalysis}
+        isAlreadySaved={isCurrentWordSaved}
+        justSaved={justSaved}
+        speechRate={preferences.speechRate}
+        onTranslate={handleTranslateWord}
+        onAddToVocabulary={handleAddToVocabulary}
+        onOpenVocabulary={() => {
+          setWordSelection(null);
+          setActiveTab('vocabulary');
+        }}
+        onClose={() => setWordSelection(null)}
+      />
+
+      {canAddContent && (
+        <AddLessonModal
+          isOpen={isAddLessonOpen}
+          defaultLevel={selectedLevel}
+          currentUser={currentUser}
+          onClose={() => setIsAddLessonOpen(false)}
+          onAddLesson={handleAddLesson}
+          onOpenAuth={() => handleOpenAuth('login')}
+        />
+      )}
+
+          <AuthModal
+            isOpen={isAuthModalOpen}
+            initialMode={authModalMode}
+            onClose={() => setIsAuthModalOpen(false)}
+            onAuthenticated={(user) => {
+              migrateGuestDataToAccount(user.id);
+              setCurrentUser(user);
+              setWordSelection(null);
+            }}
+          />
+
+          <NotesDrawer
+            isOpen={isNotesOpen}
+            notes={studyNotes}
+            activeContext={notesContext}
+            onClose={() => setIsNotesOpen(false)}
+            onSaveNote={handleSaveNote}
+            onDeleteNote={handleDeleteNote}
+          />
+
+          {!isNotesOpen && (
+            <button
+              type="button"
+              onClick={() => handleOpenNotes()}
+              aria-label={`Open My Notes (${studyNotes.length} saved)`}
+              className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-4 sm:right-5 z-30 inline-flex min-h-[44px] items-center gap-2 rounded-full border border-purple-200 bg-white/95 px-4 py-2.5 text-xs font-semibold text-[#4C1D95] shadow-lg backdrop-blur-xs hover:border-[#E11D48] hover:bg-rose-50/90 transition-all cursor-pointer touch-manipulation active:scale-95"
+            >
+              <NotebookPen className="h-4 w-4 text-[#E11D48]" aria-hidden="true" />
+              <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-base font-bold leading-none">
+                ملاحظاتي
+              </span>
+              {studyNotes.length > 0 && (
+                <span className="font-mono text-[11px] font-bold tabular-nums text-[#E11D48]">
+                  ({studyNotes.length})
+                </span>
+              )}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
