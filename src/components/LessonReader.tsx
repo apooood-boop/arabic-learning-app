@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Gauge,
+  Loader2,
   Minus,
   NotebookPen,
   Play,
@@ -39,6 +40,7 @@ import {
   stripTashkeel,
   TextToken,
   tokenizeArabicParagraph,
+  unlockArabicAudioContext,
 } from '../utils/arabic';
 import { ActiveWordSelection } from './WordContextMenu';
 import { YouTubePlayer, VideoTimeSyncInfo } from './YouTubePlayer';
@@ -155,6 +157,7 @@ export function LessonReader({
 
   // Karaoke synchronized audio state
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isLoadingSpeech, setIsLoadingSpeech] = useState(false);
   const [activeSentenceIdx, setActiveSentenceIdx] = useState<number | null>(null);
   const [activeWordIdx, setActiveWordIdx] = useState<number | null>(null);
   const [hasListenedAudio, setHasListenedAudio] = useState(false);
@@ -357,6 +360,7 @@ export function LessonReader({
     clearFallbackTimer();
     stopArabicSpeech();
     setIsSpeaking(false);
+    setIsLoadingSpeech(false);
     setActiveSentenceIdx(null);
     setActiveWordIdx(null);
   }, [clearFallbackTimer]);
@@ -475,8 +479,15 @@ export function LessonReader({
       let sentenceEnded = false;
       speakArabic(sentence.spokenText, {
         rate,
+        mode: 'sentence',
+        vocalizedText: sentence.spokenText,
+        onLoading: () => {
+          if (playbackSessionRef.current !== sessionId) return;
+          setIsLoadingSpeech(true);
+        },
         onStart: () => {
           if (playbackSessionRef.current !== sessionId) return;
+          setIsLoadingSpeech(false);
           if (sentence.wordRanges.length > 1) {
             scheduleWordAdvance(0);
           }
@@ -509,6 +520,7 @@ export function LessonReader({
   );
 
   const handleToggleSpeech = () => {
+    unlockArabicAudioContext();
     if (isSpeaking) {
       stopKaraoke();
       return;
@@ -565,6 +577,7 @@ export function LessonReader({
       onSelectWord({
         word: coreWord,
         contextSentence: matchingSentence,
+        lessonLevel: lesson.level,
         anchorRect: {
           top: rect.top,
           left: rect.left,
@@ -594,6 +607,12 @@ export function LessonReader({
     coreWord: string,
     paragraphText: string
   ) => {
+    if (e.type === 'click') {
+      const selected = window.getSelection()?.toString().trim();
+      if (selected && selected.length > 0) {
+        return;
+      }
+    }
     e.preventDefault();
     e.stopPropagation();
     if (suppressNextClickRef.current) {
@@ -710,20 +729,20 @@ export function LessonReader({
   const quizCompleted = Boolean(quizQuestions && answeredCount === quizQuestions.length);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-slide-up">
       {/* Top breadcrumb & unboxed metadata */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <button
           type="button"
           onClick={onBackToList}
-          className="inline-flex items-center gap-2 text-sm font-semibold text-[#4C1D95] hover:text-[#E11D48] transition-colors cursor-pointer"
+          className="inline-flex items-center gap-2 text-sm font-semibold text-[#2D3B22] hover:text-[#9A6F14] transition-colors cursor-pointer"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           <span>Back to {levelMeta.en} Lessons</span>
         </button>
 
-        <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono tabular-nums">
-          <span className="font-semibold text-zinc-700">
+        <div className="flex items-center gap-2 text-xs text-[#5A6552] font-mono tabular-nums">
+          <span className="font-semibold text-[#1F2718]">
             {levelMeta.en} ({levelMeta.ar})
           </span>
           <span aria-hidden="true">·</span>
@@ -733,10 +752,10 @@ export function LessonReader({
         </div>
       </div>
 
-      {/* Main Reading Card in Royal Plum & Warm Peach */}
-      <article className="rounded-2xl border border-[#ECE8EF] bg-white shadow-2xs overflow-hidden">
-        {/* Lesson Title Banner — Single clean horizontal title when Arabic/English match, or clean paired layout when distinct */}
-        <div className="border-b border-[#ECE8EF] bg-gradient-to-br from-white via-[#FDFBFC] to-rose-50/40 px-4 py-5 sm:px-10 sm:py-8">
+      {/* Main Reading Card in Dark Olive & Warm Cream */}
+      <article className="rounded-2xl border border-[#DCE5D3] bg-white shadow-2xs overflow-hidden">
+        {/* Lesson Title Banner */}
+        <div className="border-b border-[#DCE5D3] bg-gradient-to-br from-white via-[#FAFBF8] to-[#EEF2E9]/70 px-4 py-5 sm:px-10 sm:py-8">
           {(() => {
             const cleanEn = stripTashkeel(lesson.titleEn || '').trim();
             const cleanAr = stripTashkeel(lesson.titleAr || '').trim();
@@ -754,13 +773,13 @@ export function LessonReader({
                     lang={singleTitleIsArabic ? 'ar' : 'en'}
                     className={
                       singleTitleIsArabic
-                        ? `${arabicFontClass} text-3xl sm:text-4xl font-bold text-[#4C1D95] leading-[1.7] text-right`
-                        : 'font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#241734] [text-wrap:balance]'
+                        ? `${arabicFontClass} text-3xl sm:text-4xl font-bold text-[#2D3B22] leading-[1.7] text-right`
+                        : 'font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#1F2718] [text-wrap:balance]'
                     }
                   >
                     {singleTitleIsArabic ? displayArTitle : lesson.titleEn || lesson.titleAr}
                   </h1>
-                  <p className="text-sm text-zinc-600 leading-relaxed max-w-3xl">
+                  <p className="text-sm text-[#5A6552] leading-relaxed max-w-3xl">
                     {lesson.description}
                   </p>
                 </div>
@@ -770,13 +789,13 @@ export function LessonReader({
             return (
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-2 min-w-0 flex-1">
-                  <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#241734] [text-wrap:balance]">
+                  <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-[#1F2718] [text-wrap:balance]">
                     {lesson.titleEn}
                   </h1>
-                  <p className="text-sm text-zinc-600 leading-relaxed">{lesson.description}</p>
+                  <p className="text-sm text-[#5A6552] leading-relaxed">{lesson.description}</p>
                 </div>
                 <div dir="rtl" lang="ar" className="sm:text-right min-w-0">
-                  <h2 className={`${arabicFontClass} text-2xl sm:text-3xl font-bold text-[#4C1D95] leading-[1.7]`}>
+                  <h2 className={`${arabicFontClass} text-2xl sm:text-3xl font-bold text-[#2D3B22] leading-[1.7]`}>
                     {displayArTitle}
                   </h2>
                 </div>
@@ -786,7 +805,7 @@ export function LessonReader({
         </div>
 
         {/* Media & Reader Controls Toolbar */}
-        <div className="border-b border-[#ECE8EF] bg-[#F7F4F9] px-4 py-3 sm:px-10 sm:py-3.5 flex flex-wrap items-center justify-between gap-3 sm:gap-4">
+        <div className="border-b border-[#DCE5D3] bg-[#EEF2E9]/70 px-4 py-3 sm:px-10 sm:py-3.5 flex flex-wrap items-center justify-between gap-3 sm:gap-4">
           <div className="flex flex-wrap items-center gap-2.5">
             {wordCount > 0 && (
               <>
@@ -795,18 +814,23 @@ export function LessonReader({
                   onClick={handleToggleSpeech}
                   className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition-all cursor-pointer ${
                     isSpeaking
-                      ? 'bg-[#E11D48] text-white shadow-xs ring-4 ring-rose-200'
-                      : 'border border-[#ECE8EF] bg-white text-[#241734] hover:bg-rose-50/70 hover:border-rose-300'
+                      ? 'bg-[#2D3B22] text-[#E8B948] shadow-xs ring-4 ring-[#DCE5D3]'
+                      : 'border border-[#DCE5D3] bg-white text-[#1F2718] hover:bg-[#FBF3DC]/70 hover:border-[#D4A338]'
                   }`}
                 >
-                  {isSpeaking ? (
+                  {isSpeaking && isLoadingSpeech ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E8B948]" aria-hidden="true" />
+                      <span>Loading Audio...</span>
+                    </>
+                  ) : isSpeaking ? (
                     <>
                       <Volume2 className="h-3.5 w-3.5 animate-pulse" aria-hidden="true" />
                       <span>Playing · Pause</span>
                     </>
                   ) : (
                     <>
-                      <Play className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
+                      <Play className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
                       <span>Listen &amp; Follow · استمع وتابع</span>
                     </>
                   )}
@@ -817,7 +841,7 @@ export function LessonReader({
                     type="button"
                     onClick={stopKaraoke}
                     aria-label="Stop audio"
-                    className="inline-flex items-center gap-1 rounded-xl border border-[#ECE8EF] bg-white px-3 py-2 text-xs font-semibold text-zinc-600 hover:text-[#241734] transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#DCE5D3] bg-white px-3 py-2 text-xs font-semibold text-[#5A6552] hover:text-[#1F2718] transition-colors cursor-pointer"
                   >
                     <Square className="h-3 w-3" aria-hidden="true" />
                     <span>Stop</span>
@@ -828,10 +852,10 @@ export function LessonReader({
                 <div
                   role="group"
                   aria-label="Audio playback speed"
-                  className="inline-flex items-center rounded-xl border border-[#ECE8EF] bg-white p-0.5"
+                  className="inline-flex items-center rounded-xl border border-[#DCE5D3] bg-white p-0.5"
                 >
-                  <span className="inline-flex items-center gap-1 px-2 text-[11px] font-medium text-zinc-500">
-                    <Gauge className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
+                  <span className="inline-flex items-center gap-1 px-2 text-[11px] font-medium text-[#5A6552]">
+                    <Gauge className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
                   </span>
                   <button
                     type="button"
@@ -839,8 +863,8 @@ export function LessonReader({
                     aria-pressed={currentRate === 0.75}
                     className={`rounded-lg px-2.5 py-1 font-mono text-xs font-semibold transition-colors cursor-pointer ${
                       currentRate === 0.75
-                        ? 'bg-[#4C1D95] text-white'
-                        : 'text-zinc-600 hover:text-[#241734]'
+                        ? 'bg-[#2D3B22] text-white'
+                        : 'text-[#5A6552] hover:text-[#1F2718]'
                     }`}
                   >
                     0.75x
@@ -851,8 +875,8 @@ export function LessonReader({
                     aria-pressed={currentRate === 1}
                     className={`rounded-lg px-2.5 py-1 font-mono text-xs font-semibold transition-colors cursor-pointer ${
                       currentRate === 1
-                        ? 'bg-[#4C1D95] text-white'
-                        : 'text-zinc-600 hover:text-[#241734]'
+                        ? 'bg-[#2D3B22] text-white'
+                        : 'text-[#5A6552] hover:text-[#1F2718]'
                     }`}
                   >
                     1x
@@ -873,8 +897,8 @@ export function LessonReader({
               }
               className={`rounded-xl border px-3.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
                 preferences.showTashkeel
-                  ? 'border-rose-300 bg-rose-50 text-rose-900'
-                  : 'border-[#ECE8EF] bg-white text-zinc-600 hover:text-[#241734]'
+                  ? 'border-[#D4A338] bg-[#FBF3DC] text-[#9A6F14]'
+                  : 'border-[#DCE5D3] bg-white text-[#5A6552] hover:text-[#1F2718]'
               }`}
             >
               {preferences.showTashkeel ? 'Smart Tashkeel: On' : 'Tashkeel: Off'}
@@ -883,15 +907,15 @@ export function LessonReader({
             <div
               role="group"
               aria-label="Arabic textbook font family"
-              className="inline-flex rounded-xl border border-[#ECE8EF] bg-white p-0.5"
+              className="inline-flex rounded-xl border border-[#DCE5D3] bg-white p-0.5"
             >
               <button
                 type="button"
                 onClick={() => onUpdatePreferences({ ...preferences, fontStyle: 'scheherazade' })}
                 className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   preferences.fontStyle === 'scheherazade' || (preferences.fontStyle as string) === 'cairo'
-                    ? 'bg-[#4C1D95] text-white'
-                    : 'text-zinc-600 hover:text-[#241734]'
+                    ? 'bg-[#2D3B22] text-white'
+                    : 'text-[#5A6552] hover:text-[#1F2718]'
                 }`}
               >
                 Scheherazade New
@@ -901,8 +925,8 @@ export function LessonReader({
                 onClick={() => onUpdatePreferences({ ...preferences, fontStyle: 'amiri' })}
                 className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   preferences.fontStyle === 'amiri'
-                    ? 'bg-[#4C1D95] text-white'
-                    : 'text-zinc-600 hover:text-[#241734]'
+                    ? 'bg-[#2D3B22] text-white'
+                    : 'text-[#5A6552] hover:text-[#1F2718]'
                 }`}
               >
                 Amiri
@@ -912,15 +936,15 @@ export function LessonReader({
                 onClick={() => onUpdatePreferences({ ...preferences, fontStyle: 'naskh' })}
                 className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   preferences.fontStyle === 'naskh'
-                    ? 'bg-[#4C1D95] text-white'
-                    : 'text-zinc-600 hover:text-[#241734]'
+                    ? 'bg-[#2D3B22] text-white'
+                    : 'text-[#5A6552] hover:text-[#1F2718]'
                 }`}
               >
                 Noto Naskh
               </button>
             </div>
 
-            <div className="inline-flex items-center gap-1 rounded-xl border border-[#ECE8EF] bg-white px-2 py-1">
+            <div className="inline-flex items-center gap-1 rounded-xl border border-[#DCE5D3] bg-white px-2 py-1">
               <button
                 type="button"
                 onClick={() =>
@@ -930,12 +954,12 @@ export function LessonReader({
                   })
                 }
                 aria-label="Decrease Arabic font size"
-                className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-bold text-zinc-600 hover:bg-purple-50 hover:text-[#241734] cursor-pointer"
+                className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-bold text-[#5A6552] hover:bg-[#EEF2E9] hover:text-[#1F2718] cursor-pointer"
               >
                 <span>A</span>
                 <Minus className="h-3 w-3" aria-hidden="true" />
               </button>
-              <span className="font-mono text-xs tabular-nums text-[#241734] px-1.5">
+              <span className="font-mono text-xs tabular-nums text-[#1F2718] px-1.5">
                 {preferences.fontSize}px
               </span>
               <button
@@ -947,7 +971,7 @@ export function LessonReader({
                   })
                 }
                 aria-label="Increase Arabic font size"
-                className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-bold text-zinc-600 hover:bg-purple-50 hover:text-[#241734] cursor-pointer"
+                className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-bold text-[#5A6552] hover:bg-[#EEF2E9] hover:text-[#1F2718] cursor-pointer"
               >
                 <span>A</span>
                 <Plus className="h-3 w-3" aria-hidden="true" />
@@ -958,9 +982,9 @@ export function LessonReader({
               <button
                 type="button"
                 onClick={() => setShowVideo((prev) => !prev)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[#ECE8EF] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#241734] hover:bg-rose-50/70 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#1F2718] hover:bg-[#FBF3DC]/70 transition-colors cursor-pointer"
               >
-                <Video className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
+                <Video className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
                 <span>{showVideo ? 'Hide Video' : 'Show Video'}</span>
               </button>
             )}
@@ -975,12 +999,13 @@ export function LessonReader({
                     refId: lesson.id,
                   })
                 }
-                className="inline-flex items-center gap-1.5 rounded-xl border border-purple-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-[#4C1D95] hover:bg-purple-50 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#2D3B22] hover:bg-[#FBF3DC]/70 transition-colors cursor-pointer"
               >
-                <NotebookPen className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
-                <span>ملاحظاتي · Notes</span>
+                <NotebookPen className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+                <span className="font-arabic-cairo">ملاحظاتي</span>
+                <span>· Notes</span>
                 {notesCount > 0 && (
-                  <span className="font-mono text-[11px] tabular-nums text-[#E11D48]">
+                  <span className="font-mono text-[11px] tabular-nums text-[#9A6F14]">
                     ({notesCount})
                   </span>
                 )}
@@ -1005,25 +1030,25 @@ export function LessonReader({
         {/* Interactive LingQ-Style Arabic Reading Canvas with Karaoke Highlighting */}
         <div className="px-4 py-6 sm:px-12 sm:py-10">
           {parsedParagraphs.length === 0 ? (
-            <div className="rounded-xl border border-[#ECE8EF] bg-[#F7F4F9] px-6 py-10 text-center text-sm text-zinc-600">
+            <div className="rounded-xl border border-[#DCE5D3] bg-[#EEF2E9]/70 px-6 py-10 text-center text-sm text-[#5A6552]">
               {hasVideoUrl
                 ? 'This video lesson has no transcript attached. Watch the YouTube lesson above to practice listening comprehension.'
                 : 'This reading lesson currently has no Arabic text content.'}
             </div>
           ) : (
             <>
-              <div className="mb-6 sm:mb-7 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-500">
+              <div className="mb-6 sm:mb-7 flex flex-wrap items-center justify-between gap-3 text-xs text-[#5A6552]">
                 <div className="flex flex-wrap items-center gap-2.5">
                   <span>
                     Tap, click, or hold any Arabic word for instant translation, partial tashkeel, and flashcards.
                   </span>
                   {hasVideoUrl && effectiveSegments.length > 0 && (
-                    <span className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-[#F7F4F9] px-2.5 py-1 text-[11px] font-semibold text-[#4C1D95]">
+                    <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#DCE5D3] bg-[#EEF2E9] px-2.5 py-1 text-[11px] font-semibold text-[#2D3B22]">
                       <Radio
                         className={`h-3 w-3 ${
                           isVideoSyncActive && videoSync.isPlaying
-                            ? 'text-[#E11D48] animate-pulse'
-                            : 'text-[#4C1D95]'
+                            ? 'text-[#D4A338] animate-pulse'
+                            : 'text-[#2D3B22]'
                         }`}
                         aria-hidden="true"
                       />
@@ -1036,15 +1061,21 @@ export function LessonReader({
                   )}
                 </div>
                 <div className="flex items-center gap-4">
-                  <span className="text-[#E11D48] font-medium">Coral: Reviewing</span>
-                  <span className="text-[#4C1D95] font-medium">Plum: Learned</span>
+                  <span className="inline-flex items-center gap-1.5 text-[#9A6F14] font-semibold">
+                    <span className="h-2 w-2 rounded-full bg-[#D4A338]" aria-hidden="true" />
+                    Amber: Reviewing
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-[#2D3B22] font-semibold">
+                    <span className="h-2 w-2 rounded-full bg-[#2D3B22]" aria-hidden="true" />
+                    Olive: Learned
+                  </span>
                 </div>
               </div>
 
               <div
                 dir="rtl"
                 lang="ar"
-                className={`${arabicFontClass} text-[#241734] space-y-6`}
+                className={`${arabicFontClass} text-[#1F2718] space-y-6`}
                 style={{
                   fontSize: `${preferences.fontSize}px`,
                   lineHeight: 2.25,
@@ -1066,8 +1097,8 @@ export function LessonReader({
                       className={`rounded-2xl transition-all duration-200 ${
                         segment
                           ? isActiveVideoSegment
-                            ? 'border-r-4 border-[#E11D48] bg-gradient-to-l from-rose-50/85 via-[#FDFBFC] to-purple-50/40 px-4 py-3.5 shadow-2xs ring-1 ring-rose-200/80'
-                            : 'border-r-2 border-[#ECE8EF] px-4 py-2 hover:border-purple-300 hover:bg-[#FDFBFC]'
+                            ? 'border-r-4 border-[#D4A338] bg-gradient-to-l from-[#FBF3DC]/75 via-[#FAFBF8] to-[#EEF2E9]/75 px-4 py-3.5 shadow-2xs ring-1 ring-[#D4A338]/40'
+                            : 'border-r-2 border-[#DCE5D3] px-4 py-2 hover:border-[#3E522D]/50 hover:bg-[#FAFBF8]'
                           : ''
                       }`}
                     >
@@ -1080,8 +1111,8 @@ export function LessonReader({
                             title={`Jump video to ${formatTimestamp(segment.startSec)}`}
                             className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-[11px] font-semibold tabular-nums transition-colors cursor-pointer ${
                               isActiveVideoSegment
-                                ? 'bg-[#E11D48] text-white shadow-2xs'
-                                : 'border border-[#ECE8EF] bg-[#F7F4F9] text-[#4C1D95] hover:border-rose-300 hover:bg-rose-50 hover:text-[#E11D48]'
+                                ? 'bg-[#2D3B22] text-[#E8B948] shadow-2xs'
+                                : 'border border-[#DCE5D3] bg-[#EEF2E9] text-[#2D3B22] hover:border-[#D4A338] hover:bg-[#FBF3DC] hover:text-[#9A6F14]'
                             }`}
                           >
                             <Play className="h-2.5 w-2.5" aria-hidden="true" />
@@ -1090,7 +1121,7 @@ export function LessonReader({
                             </span>
                           </button>
                           {isActiveVideoSegment && (
-                            <span className="text-[11px] font-semibold text-[#E11D48]">
+                            <span className="font-arabic-cairo text-[11px] font-semibold text-[#9A6F14]">
                               {videoSync.isPlaying ? 'يُعرَض الآن · Syncing' : 'المقطع الحالي'}
                             </span>
                           )}
@@ -1107,7 +1138,7 @@ export function LessonReader({
                               key={sentence.sentenceIndex}
                               className={`transition-colors duration-200 rounded-xl ${
                                 isActiveSentence
-                                  ? 'bg-rose-50/75 ring-1 ring-rose-300/80 px-2 py-0.5'
+                                  ? 'bg-[#FBF3DC]/80 ring-1 ring-[#D4A338]/60 px-2 py-0.5'
                                   : ''
                               }`}
                             >
@@ -1142,22 +1173,22 @@ export function LessonReader({
                                   currentWordOrder < activeVideoWordTarget.flatWordOrder;
 
                                 let wordHighlightClass =
-                                  'hover:bg-rose-50/90 hover:text-[#E11D48]';
+                                  'hover:bg-[#FBF3DC]/90 hover:text-[#2D3B22]';
                                 if (isKaraokeWord || isVideoActiveWord) {
                                   wordHighlightClass =
-                                    'bg-[#E11D48] text-white shadow-sm ring-2 ring-rose-300 scale-[1.03]';
+                                    'bg-[#D4A338] text-[#1F2718] shadow-sm ring-2 ring-[#E8B948] scale-[1.03]';
                                 } else if (isWordSelected) {
                                   wordHighlightClass =
-                                    'bg-rose-100 text-[#4C1D95] ring-2 ring-[#E11D48]/45';
+                                    'bg-[#2D3B22] text-[#E8B948] ring-2 ring-[#D4A338]/60';
                                 } else if (isVideoSpokenWord) {
                                   wordHighlightClass =
-                                    'bg-purple-100/70 text-[#4C1D95] hover:bg-rose-50/90 hover:text-[#E11D48]';
+                                    'bg-[#EEF2E9] text-[#2D3B22] hover:bg-[#FBF3DC]/90 hover:text-[#9A6F14]';
                                 } else if (status === 'learned') {
                                   wordHighlightClass =
-                                    'bg-purple-50/90 text-[#4C1D95] underline decoration-[#4C1D95]/50 decoration-dotted underline-offset-[10px] hover:bg-purple-100/80';
+                                    'bg-[#EEF2E9]/90 text-[#2D3B22] underline decoration-[#2D3B22]/50 decoration-dotted underline-offset-[10px] hover:bg-[#DCE5D3]/80';
                                 } else if (status === 'needs_review') {
                                   wordHighlightClass =
-                                    'bg-rose-50/90 text-[#BE123C] underline decoration-[#F43F5E]/65 decoration-dotted underline-offset-[10px] hover:bg-rose-100/90';
+                                    'bg-[#FBF3DC]/90 text-[#9A6F14] underline decoration-[#D4A338]/80 decoration-dotted underline-offset-[10px] hover:bg-[#FBF3DC]';
                                 }
 
                                 return (
@@ -1178,7 +1209,7 @@ export function LessonReader({
                                       onTouchMove={handleWordTouchMove}
                                       onTouchEnd={handleWordTouchEnd}
                                       onTouchCancel={handleWordTouchEnd}
-                                      className={`touch-word-btn inline rounded-lg px-1.5 py-0.5 transition-all duration-150 cursor-pointer active:scale-95 active:bg-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E11D48] ${wordHighlightClass}`}
+                                      className={`touch-word-btn inline rounded-lg px-1.5 py-0.5 transition-all duration-150 cursor-pointer active:scale-95 active:bg-[#FBF3DC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4A338] ${wordHighlightClass}`}
                                     >
                                       {displayWord}
                                     </button>
@@ -1201,23 +1232,25 @@ export function LessonReader({
 
         {/* AI Comprehension Quiz (اختبر فهمك) Section */}
         {wordCount > 0 && (
-          <div className="border-t border-[#ECE8EF] bg-gradient-to-br from-[#F7F4F9] via-white to-rose-50/35 px-4 py-6 sm:px-12 sm:py-8">
+          <div className="border-t border-[#DCE5D3] bg-gradient-to-br from-[#EEF2E9]/70 via-[#FAFBF8] to-[#FBF3DC]/40 px-4 py-6 sm:px-12 sm:py-8">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-1">
                 <div className="flex items-center gap-2.5">
-                  <ClipboardCheck className="h-5 w-5 text-[#E11D48]" aria-hidden="true" />
-                  <h2 className="font-display text-xl font-bold text-[#241734]">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#FBF3DC] text-[#9A6F14] border border-[#E8D7A7]/60">
+                    <ClipboardCheck className="h-5 w-5 text-[#D4A338]" aria-hidden="true" />
+                  </div>
+                  <h2 className="font-display text-xl font-bold text-[#1F2718]">
                     Reading Comprehension Check
                   </h2>
                   <span
                     dir="rtl"
                     lang="ar"
-                    className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]"
+                    className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]"
                   >
                     اختبارُ الفهمِ
                   </span>
                 </div>
-                <p className="text-xs text-zinc-600">
+                <p className="text-xs text-[#5A6552]">
                   Test your understanding of this passage with 3 targeted multiple-choice questions.
                 </p>
               </div>
@@ -1227,9 +1260,9 @@ export function LessonReader({
                   type="button"
                   onClick={handleGenerateQuiz}
                   disabled={quizLoading}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#E11D48] px-5 py-3 text-sm font-semibold text-white hover:bg-[#BE123C] disabled:opacity-60 shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#2D3B22] px-5 py-3 text-sm font-semibold text-white hover:bg-[#3E522D] disabled:opacity-60 shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <Sparkles className="h-4 w-4 text-rose-200" aria-hidden="true" />
+                  <Sparkles className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
                   <span>
                     {quizLoading
                       ? 'Generating 3 Questions...'
@@ -1240,12 +1273,12 @@ export function LessonReader({
             </div>
 
             {quizError && (
-              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800 flex items-center justify-between gap-3">
+              <div className="mt-4 rounded-xl border border-orange-200 bg-[#FEF2E8] px-4 py-3 text-xs text-[#9A3412] flex items-center justify-between gap-3">
                 <span>{quizError}</span>
                 <button
                   type="button"
                   onClick={handleGenerateQuiz}
-                  className="font-semibold text-rose-900 underline cursor-pointer"
+                  className="font-semibold text-[#9A3412] underline cursor-pointer"
                 >
                   Retry
                 </button>
@@ -1257,12 +1290,12 @@ export function LessonReader({
                 {[0, 1, 2].map((i) => (
                   <div
                     key={i}
-                    className="rounded-2xl border border-[#ECE8EF] bg-white p-5 space-y-3"
+                    className="rounded-2xl border border-[#DCE5D3] bg-white p-5 space-y-3"
                   >
-                    <div className="h-4 w-2/3 rounded bg-purple-100/70 animate-pulse" />
+                    <div className="h-4 w-2/3 rounded bg-[#DCE5D3] animate-pulse" />
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div className="h-10 rounded-xl bg-[#F7F4F9] animate-pulse" />
-                      <div className="h-10 rounded-xl bg-[#F7F4F9] animate-pulse" />
+                      <div className="h-10 rounded-xl bg-[#EEF2E9] animate-pulse" />
+                      <div className="h-10 rounded-xl bg-[#EEF2E9] animate-pulse" />
                     </div>
                   </div>
                 ))}
@@ -1279,17 +1312,17 @@ export function LessonReader({
                   return (
                     <div
                       key={q.id}
-                      className="rounded-2xl border border-[#ECE8EF] bg-white p-5 sm:p-6 shadow-2xs space-y-4"
+                      className="rounded-2xl border border-[#DCE5D3] bg-white p-5 sm:p-6 shadow-2xs space-y-4"
                     >
                       <div className="space-y-1.5">
-                        <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
-                          <span className="font-mono font-bold text-[#E11D48]">
+                        <div className="flex items-center justify-between gap-2 text-xs text-[#5A6552]">
+                          <span className="font-mono font-bold text-[#9A6F14]">
                             Question 0{qIdx + 1} / 0{quizQuestions.length}
                           </span>
                           {isAnswered && (
                             <span
                               className={`inline-flex items-center gap-1 font-semibold ${
-                                isCorrect ? 'text-[#4C1D95]' : 'text-[#E11D48]'
+                                isCorrect ? 'text-[#2D3B22]' : 'text-[#C2410C]'
                               }`}
                             >
                               {isCorrect ? (
@@ -1310,11 +1343,11 @@ export function LessonReader({
                         <p
                           dir="rtl"
                           lang="ar"
-                          className={`${arabicFontClass} text-xl sm:text-2xl font-bold text-[#241734] text-right leading-[2.0]`}
+                          className={`${arabicFontClass} text-xl sm:text-2xl font-bold text-[#1F2718] text-right leading-[2.0]`}
                         >
                           {applySmartPartialTashkeel(q.questionAr)}
                         </p>
-                        <p className="text-sm font-semibold text-zinc-800">{q.questionEn}</p>
+                        <p className="text-sm font-semibold text-[#3F4A37]">{q.questionEn}</p>
                       </div>
 
                       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -1323,15 +1356,15 @@ export function LessonReader({
                           const isRightOption = q.correctIndex === optIdx;
 
                           let btnStyle =
-                            'border-[#ECE8EF] bg-[#F7F4F9] text-[#241734] hover:border-[#E11D48]/50 hover:bg-white';
+                            'border-[#DCE5D3] bg-[#FAFBF8] text-[#1F2718] hover:border-[#D4A338] hover:bg-white';
                           if (isAnswered) {
                             if (isRightOption) {
                               btnStyle =
-                                'border-[#4C1D95] bg-purple-50 text-[#4C1D95] font-semibold';
+                                'border-[#2D3B22] bg-[#EEF2E9] text-[#2D3B22] font-semibold';
                             } else if (isSelected) {
-                              btnStyle = 'border-rose-400 bg-rose-50 text-rose-950';
+                              btnStyle = 'border-[#C2410C] bg-[#FEF2E8] text-[#9A3412]';
                             } else {
-                              btnStyle = 'border-[#ECE8EF] bg-white text-zinc-400 opacity-75';
+                              btnStyle = 'border-[#DCE5D3] bg-white text-[#6B7861] opacity-75';
                             }
                           }
 
@@ -1351,13 +1384,13 @@ export function LessonReader({
                               </span>
                               {isAnswered && isRightOption && (
                                 <CheckCircle2
-                                  className="h-4 w-4 shrink-0 text-[#4C1D95]"
+                                  className="h-4 w-4 shrink-0 text-[#2D3B22]"
                                   aria-hidden="true"
                                 />
                               )}
                               {isAnswered && isSelected && !isRightOption && (
                                 <XCircle
-                                  className="h-4 w-4 shrink-0 text-[#E11D48]"
+                                  className="h-4 w-4 shrink-0 text-[#C2410C]"
                                   aria-hidden="true"
                                 />
                               )}
@@ -1367,8 +1400,8 @@ export function LessonReader({
                       </div>
 
                       {isAnswered && q.explanation && (
-                        <p className="rounded-xl bg-[#F7F4F9] border border-[#ECE8EF] px-3.5 py-2.5 text-xs text-zinc-700 leading-relaxed">
-                          <span className="font-semibold text-[#241734]">Passage Note: </span>
+                        <p className="rounded-xl bg-[#FAFBF8] border border-[#DCE5D3] px-3.5 py-2.5 text-xs text-[#3F4A37] leading-relaxed">
+                          <span className="font-semibold text-[#1F2718]">Passage Note: </span>
                           {q.explanation}
                         </p>
                       )}
@@ -1377,12 +1410,12 @@ export function LessonReader({
                 })}
 
                 {quizCompleted && (
-                  <div className="rounded-2xl border border-[#ECE8EF] bg-white p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between shadow-2xs">
+                  <div className="rounded-2xl border border-[#DCE5D3] bg-white p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between shadow-2xs">
                     <div className="space-y-1">
-                      <p className="font-display text-lg font-bold text-[#4C1D95]">
+                      <p className="font-display text-lg font-bold text-[#2D3B22]">
                         Score: {correctCount} / {quizQuestions.length} Correct
                       </p>
-                      <p className="text-xs text-zinc-600">
+                      <p className="text-xs text-[#5A6552]">
                         {correctCount === quizQuestions.length
                           ? 'ممتاز! Excellent comprehension of the Arabic passage. Recorded to reading history.'
                           : 'جيد جداً! Review the highlighted passage notes above and try again anytime.'}
@@ -1393,9 +1426,9 @@ export function LessonReader({
                     <button
                       type="button"
                       onClick={handleGenerateQuiz}
-                      className="inline-flex items-center gap-2 rounded-xl bg-[#4C1D95] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#581C87] transition-colors shrink-0 cursor-pointer"
+                      className="inline-flex items-center gap-2 rounded-xl bg-[#2D3B22] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#3E522D] transition-colors shrink-0 cursor-pointer"
                     >
-                      <RotateCcw className="h-3.5 w-3.5 text-rose-200" aria-hidden="true" />
+                      <RotateCcw className="h-3.5 w-3.5 text-[#E8B948]" aria-hidden="true" />
                       <span>New Comprehension Quiz</span>
                     </button>
                   </div>

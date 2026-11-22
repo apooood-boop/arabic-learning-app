@@ -341,23 +341,23 @@ export function AddLessonModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1F1035]/55 p-4 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#182111]/60 p-4 backdrop-blur-xs"
       role="dialog"
       aria-modal="true"
       aria-labelledby="add-lesson-title"
     >
-      <div className="w-full max-w-2xl rounded-2xl border border-[#ECE8EF] bg-white shadow-2xl max-h-[92vh] overflow-y-auto">
-        <div className="flex items-center justify-between border-b border-[#ECE8EF] px-6 py-4">
+      <div className="w-full max-w-2xl rounded-2xl border border-[#DCE5D3] bg-white shadow-2xl max-h-[92vh] overflow-y-auto animate-fade-slide-up">
+        <div className="flex items-center justify-between border-b border-[#DCE5D3] bg-[#FAFBF8] px-6 py-4">
           <div>
             <div className="flex items-baseline gap-2.5">
-              <h2 id="add-lesson-title" className="font-display text-xl font-bold text-[#241734]">
+              <h2 id="add-lesson-title" className="font-display text-xl font-bold text-[#1F2718]">
                 Add New Lesson
               </h2>
-              <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]">
+              <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]">
                 إضافةُ درسٍ جديدٍ
               </span>
             </div>
-            <p className="text-xs text-zinc-500 mt-0.5">
+            <p className="text-xs text-[#5A6552] mt-0.5">
               Texts and real video transcripts are automatically formatted with Smart Partial Tashkeel before publishing.
             </p>
           </div>
@@ -366,17 +366,17 @@ export function AddLessonModal({
             onClick={onClose}
             disabled={isProcessing}
             aria-label="Close modal"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 hover:bg-purple-50 hover:text-[#241734] disabled:opacity-50 transition-colors cursor-pointer"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[#5A6552] hover:bg-[#EEF2E9] hover:text-[#1F2718] disabled:opacity-50 transition-colors cursor-pointer"
           >
             <X className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
 
         <form onSubmit={(e) => handleSubmit(e, false)} className="p-6 space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#ECE8EF]/80 bg-[#F7F4F9] px-3.5 py-2.5 text-xs text-zinc-600">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9]/70 px-3.5 py-2.5 text-xs text-[#5A6552]">
             <span>
               Publishing as{' '}
-              <span className="font-semibold text-[#241734]">
+              <span className="font-semibold text-[#1F2718]">
                 {currentUser ? currentUser.name : 'Guest Author'}
               </span>
             </span>
@@ -387,7 +387,7 @@ export function AddLessonModal({
                   onClose();
                   onOpenAuth();
                 }}
-                className="font-semibold text-[#E11D48] hover:underline cursor-pointer"
+                className="font-semibold text-[#9A6F14] hover:underline cursor-pointer"
               >
                 Sign in to save under your profile
               </button>
@@ -395,7 +395,7 @@ export function AddLessonModal({
           </div>
 
           {error && (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-medium text-rose-800">
+            <div className="rounded-xl border border-orange-200 bg-[#FEF2E8] px-4 py-2.5 text-xs font-medium text-[#9A3412]">
               {error}
             </div>
           )}
@@ -403,7 +403,7 @@ export function AddLessonModal({
           {/* 1. Text Title & Optional Subtitle */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="lesson-title-main" className="block text-xs font-semibold text-zinc-800 mb-1.5">
+              <label htmlFor="lesson-title-main" className="block text-xs font-semibold text-[#1F2718] mb-1.5">
                 Text Title (عنوان النص) *
               </label>
               <input
@@ -413,12 +413,12 @@ export function AddLessonModal({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g. شايُ المساءِ في القاهرةِ"
-                className="w-full rounded-xl border border-[#ECE8EF] bg-white px-3.5 py-2.5 text-sm text-[#241734] focus:border-[#E11D48] focus:outline-none focus:ring-2 focus:ring-[#E11D48]/20"
+                className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-sm text-[#1F2718] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15"
               />
             </div>
 
             <div>
-              <label htmlFor="lesson-subtitle" className="block text-xs font-semibold text-zinc-800 mb-1.5">
+              <label htmlFor="lesson-subtitle" className="block text-xs font-semibold text-[#1F2718] mb-1.5">
                 English Title / Subtitle (Optional)
               </label>
               <input
@@ -427,7 +427,7 @@ export function AddLessonModal({
                 value={subtitle}
                 onChange={(e) => setSubtitle(e.target.value)}
                 placeholder="e.g. Evening Tea in Cairo"
-                className="w-full rounded-xl border border-[#ECE8EF] bg-white px-3.5 py-2.5 text-sm text-[#241734] focus:border-[#E11D48] focus:outline-none focus:ring-2 focus:ring-[#E11D48]/20"
+                className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-sm text-[#1F2718] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15"
               />
             </div>
           </div>
@@ -435,14 +435,14 @@ export function AddLessonModal({
           {/* 2. Level Selector Dropdown (مبتدئ / متوسط / متقدم) */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="lesson-level" className="block text-xs font-semibold text-zinc-800 mb-1.5">
+              <label htmlFor="lesson-level" className="block text-xs font-semibold text-[#1F2718] mb-1.5">
                 Proficiency Level (المستوى) *
               </label>
               <select
                 id="lesson-level"
                 value={level}
                 onChange={(e) => setLevel(e.target.value as ProficiencyLevel | '')}
-                className="w-full rounded-xl border border-[#ECE8EF] bg-white px-3.5 py-2.5 text-sm text-[#241734] focus:border-[#E11D48] focus:outline-none focus:ring-2 focus:ring-[#E11D48]/20"
+                className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-sm text-[#1F2718] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15"
               >
                 <option value="">-- اختر المستوى / Select Level --</option>
                 <option value="beginner">مبتدئ (Beginner)</option>
@@ -453,10 +453,10 @@ export function AddLessonModal({
 
             {/* 3. Content Type Selector */}
             <div>
-              <span className="block text-xs font-semibold text-zinc-800 mb-1.5">
+              <span className="block text-xs font-semibold text-[#1F2718] mb-1.5">
                 Content Type (نوع المحتوى) *
               </span>
-              <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-[#ECE8EF] bg-[#F7F4F9] p-1">
+              <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9]/80 p-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -466,11 +466,11 @@ export function AddLessonModal({
                   }}
                   className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
                     contentType === 'text'
-                      ? 'bg-white text-[#E11D48] shadow-2xs'
-                      : 'text-zinc-600 hover:text-[#241734]'
+                      ? 'bg-white text-[#2D3B22] shadow-2xs'
+                      : 'text-[#5A6552] hover:text-[#1F2718]'
                   }`}
                 >
-                  <BookOpenText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <BookOpenText className="h-3.5 w-3.5 shrink-0 text-[#D4A338]" aria-hidden="true" />
                   <span className="truncate">Written Text</span>
                 </button>
                 <button
@@ -478,11 +478,11 @@ export function AddLessonModal({
                   onClick={() => setContentType('video')}
                   className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
                     contentType === 'video'
-                      ? 'bg-white text-[#4C1D95] shadow-2xs'
-                      : 'text-zinc-600 hover:text-[#241734]'
+                      ? 'bg-white text-[#2D3B22] shadow-2xs'
+                      : 'text-[#5A6552] hover:text-[#1F2718]'
                   }`}
                 >
-                  <Video className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <Video className="h-3.5 w-3.5 shrink-0 text-[#D4A338]" aria-hidden="true" />
                   <span className="truncate">YouTube Video</span>
                 </button>
               </div>
@@ -491,7 +491,7 @@ export function AddLessonModal({
 
           {contentType === 'video' && (
             <div className="space-y-2.5">
-              <label htmlFor="lesson-youtube" className="block text-xs font-semibold text-zinc-800">
+              <label htmlFor="lesson-youtube" className="block text-xs font-semibold text-[#1F2718]">
                 YouTube Video URL *
               </label>
               <div className="flex flex-col sm:flex-row gap-2">
@@ -507,22 +507,22 @@ export function AddLessonModal({
                     }
                   }}
                   placeholder="https://www.youtube.com/watch?v=..."
-                  className="flex-1 rounded-xl border border-[#ECE8EF] bg-white px-3.5 py-2.5 text-sm text-[#241734] focus:border-[#E11D48] focus:outline-none focus:ring-2 focus:ring-[#E11D48]/20"
+                  className="flex-1 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-sm text-[#1F2718] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15"
                 />
                 <button
                   type="button"
                   onClick={handleFetchCaptions}
                   disabled={captionStatus === 'loading' || !youtubeUrl.trim()}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-purple-200 bg-[#F7F4F9] px-3.5 py-2.5 text-xs font-semibold text-[#4C1D95] hover:bg-purple-100/70 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9] px-3.5 py-2.5 text-xs font-semibold text-[#2D3B22] hover:bg-[#DCE5D3]/70 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {captionStatus === 'loading' ? (
                     <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#D4A338]" aria-hidden="true" />
                       <span>Fetching Captions...</span>
                     </>
                   ) : (
                     <>
-                      <Captions className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
+                      <Captions className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
                       <span>Fetch Real Captions · جلب الترجمة</span>
                     </>
                   )}
@@ -533,20 +533,20 @@ export function AddLessonModal({
                 <div
                   dir="rtl"
                   lang="ar"
-                  className="flex items-start gap-2 rounded-xl border border-purple-200 bg-purple-50/70 px-3.5 py-2.5 text-xs text-[#4C1D95]"
+                  className="flex items-start gap-2 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9] px-3.5 py-2.5 text-xs text-[#2D3B22]"
                 >
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#4C1D95]" aria-hidden="true" />
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#2D3B22]" aria-hidden="true" />
                   <span>{captionNotice}</span>
                 </div>
               )}
 
               {captionStatus === 'blocked' && captionNotice && (
-                <div className="rounded-xl border border-amber-200 bg-amber-50/85 px-4 py-3 space-y-2 text-xs text-amber-950">
+                <div className="rounded-xl border border-[#E8D7A7] bg-[#FBF3DC] px-4 py-3 space-y-2 text-xs text-[#1F2718]">
                   <div className="flex items-start gap-2" dir="rtl" lang="ar">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#9A6F14]" aria-hidden="true" />
                     <div className="space-y-1">
                       <p className="font-semibold">{captionNotice}</p>
-                      <p className="text-[11px] text-amber-800">
+                      <p className="text-[11px] text-[#5A6552]">
                         نصيحة: افتح الفيديو في يوتيوب واضغط على «إظهار النص / Show transcript»، ثم انسخه وألصقه في الصندوق أدناه (مع الطوابع الزمنية مثل 0:15 أو بدونها). لن يتم اختلاق أي نص تلقائي غير حقيقي.
                       </p>
                     </div>
@@ -556,7 +556,7 @@ export function AddLessonModal({
                       <button
                         type="button"
                         onClick={(e) => handleSubmit(e, true)}
-                        className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100/60 transition-colors cursor-pointer"
+                        className="rounded-lg border border-[#D4A338] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#1F2718] hover:bg-[#FAFBF8] transition-colors cursor-pointer"
                       >
                         Publish Video Without Transcript · نشر الفيديو بدون نص
                       </button>
@@ -570,12 +570,12 @@ export function AddLessonModal({
           {/* 4. Arabic Content / Paste Video Transcript Textarea */}
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-              <label htmlFor="lesson-text-ar" className="block text-xs font-semibold text-zinc-800">
+              <label htmlFor="lesson-text-ar" className="block text-xs font-semibold text-[#1F2718]">
                 {contentType === 'video'
                   ? 'Paste Video Transcript (الصق نص الفيديو الحقيقي هنا)'
                   : 'Arabic Reading Text (Smart Partial Tashkeel applied automatically) *'}
               </label>
-              <span className="font-mono text-xs tabular-nums text-zinc-500">
+              <span className="font-mono text-xs tabular-nums text-[#5A6552]">
                 {wordCount} Arabic words
               </span>
             </div>
@@ -592,31 +592,31 @@ export function AddLessonModal({
                   ? 'الصق نص الفيديو الحقيقي المنسوخ من يوتيوب هنا (يدعم الطوابع الزمنية مثل 0:15 أو الفقرات العادية)، أو اضغط «Fetch Real Captions» أعلاه لمحاولة استخراجه تلقائيًا...'
                   : 'اكتبِ النّصَّ العربيَّ هنا... سيتمُّ تنسيقُهُ تلقائيًّا بالتّشكيلِ الجزئيِّ الذّكيِّ.'
               }
-              className={`w-full rounded-xl border bg-white px-4 py-3 font-arabic-scheherazade text-xl leading-[2.2] text-[#241734] focus:border-[#E11D48] focus:outline-none focus:ring-2 focus:ring-[#E11D48]/20 ${
+              className={`w-full rounded-xl border bg-white px-4 py-3 font-arabic-scheherazade text-xl leading-[2.2] text-[#1F2718] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15 ${
                 captionStatus === 'blocked' && !textAr.trim()
-                  ? 'border-amber-300 ring-2 ring-amber-200/70'
-                  : 'border-[#ECE8EF]'
+                  ? 'border-[#D4A338] ring-2 ring-[#D4A338]/30'
+                  : 'border-[#DCE5D3]'
               }`}
             />
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#ECE8EF]">
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#DCE5D3]">
             <button
               type="button"
               onClick={onClose}
               disabled={isProcessing}
-              className="rounded-xl border border-[#ECE8EF] bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-[#F7F4F9] disabled:opacity-50 transition-colors cursor-pointer"
+              className="rounded-xl border border-[#DCE5D3] bg-white px-4 py-2 text-sm font-medium text-[#3F4A37] hover:bg-[#EEF2E9] disabled:opacity-50 transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isProcessing || captionStatus === 'loading'}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#E11D48] px-5 py-2 text-sm font-semibold text-white hover:bg-[#BE123C] disabled:opacity-70 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#2D3B22] px-5 py-2 text-sm font-semibold text-white hover:bg-[#3E522D] disabled:opacity-70 transition-colors cursor-pointer"
             >
               {isProcessing ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  <Loader2 className="h-4 w-4 animate-spin text-[#E8B948]" aria-hidden="true" />
                   <span>
                     {contentType === 'video'
                       ? 'Syncing Real Transcript & Tashkeel...'

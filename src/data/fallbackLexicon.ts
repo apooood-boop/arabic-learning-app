@@ -1,9 +1,11 @@
-import type { WordAnalysis } from '../types/arabic.ts';
+import type { ProficiencyLevel, SentencePair, WordAnalysis } from '../types/arabic.ts';
 import {
   applySmartPartialTashkeel,
+  countArabicWords,
   formatMinimalArabicRoot,
   inferArabicWordType,
   normalizeArabicWord,
+  stripFinalIrabForSpeech,
   stripTashkeel,
 } from '../utils/arabic.ts';
 
@@ -862,63 +864,272 @@ export function enrichWordMeta(
   return { wordType, root };
 }
 
+export function getLexiconSpeechText(
+  rawWord: string,
+  fallbackWordWithTashkeel?: string,
+  wordType?: string,
+  partOfSpeech?: string
+): string {
+  const exact = findExactLexiconMatch(rawWord || fallbackWordWithTashkeel || '');
+  const richSource = exact?.wordWithTashkeel || fallbackWordWithTashkeel || rawWord;
+  return stripFinalIrabForSpeech(richSource, {
+    wordType: wordType || exact?.wordType,
+    partOfSpeech: partOfSpeech || exact?.partOfSpeech,
+  });
+}
+
+function buildLevelFallbackExamples(
+  displayWord: string,
+  cleanMeaning: string,
+  wordType: string,
+  contextSentence: string | undefined,
+  level: ProficiencyLevel
+): SentencePair[] {
+  const cleanContext = contextSentence?.trim()
+    ? applySmartPartialTashkeel(contextSentence.trim())
+    : '';
+  const pausalWord = stripFinalIrabForSpeech(displayWord, { wordType });
+  const bareWord = applySmartPartialTashkeel(pausalWord.replace(/\u0652$/u, ''));
+
+  if (level === 'beginner') {
+    const simpleTemplates: Record<string, SentencePair> = {
+      فعل: {
+        arabic: applySmartPartialTashkeel(`الطّالبُ ${displayWord} كلَّ يومٍ.`),
+        english: `The student uses this action (${cleanMeaning}) every day.`,
+        contextLabel: 'Beginner · Simple Daily Use',
+      },
+      صفة: {
+        arabic: applySmartPartialTashkeel(`هَذا الشّيْءُ ${displayWord} جِدًّا.`),
+        english: `This thing is very (${cleanMeaning}).`,
+        contextLabel: 'Beginner · Simple Daily Use',
+      },
+      حرف: {
+        arabic: applySmartPartialTashkeel(`الكتابُ ${displayWord} الطّاولةِ في الغرفةِ.`),
+        english: `Simple everyday sentence using "${pausalWord}" (${cleanMeaning}).`,
+        contextLabel: 'Beginner · Simple Daily Use',
+      },
+    };
+    const primary = simpleTemplates[wordType] ?? {
+      arabic: applySmartPartialTashkeel(`أحبُّ ${displayWord} في بيتي.`),
+      english: `I like ${cleanMeaning} in my home.`,
+      contextLabel: 'Beginner · Simple Daily Use',
+    };
+
+    const secondary: SentencePair =
+      cleanContext && countArabicWords(cleanContext) <= 9
+        ? {
+            arabic: cleanContext,
+            english: 'From your Beginner reading passage.',
+            contextLabel: 'Lesson Context',
+          }
+        : {
+            arabic: applySmartPartialTashkeel(`نرى ${displayWord} في الصّباحِ.`),
+            english: `We see ${cleanMeaning} in the morning.`,
+            contextLabel: 'Beginner · Everyday Context',
+          };
+
+    return [primary, secondary];
+  }
+
+  if (level === 'advanced') {
+    const primary: SentencePair =
+      wordType === 'فعل'
+        ? {
+            arabic: applySmartPartialTashkeel(
+              `حِينَ ${displayWord} الإِنسانُ فِي قَضايا الفِكْرِ، يَتَجَلَّى عُمْقُ الرُّؤْيَةِ وَسَعَةُ الأُفُقِ.`
+            ),
+            english: `When one engages deeply with ideas (${cleanMeaning}), depth of vision and breadth of horizon become clear.`,
+            contextLabel: 'Advanced · Literary Discourse',
+          }
+        : wordType === 'صفة'
+          ? {
+              arabic: applySmartPartialTashkeel(
+                `يَتَّسِمُ هَذا الأُسْلُوبُ البَلاغِيُّ بِطابَعٍ ${displayWord} يَجْذِبُ القارِئَ المتأمِّلَ.`
+              ),
+              english: `This rhetorical style is characterized by a (${cleanMeaning}) quality that captivates the thoughtful reader.`,
+              contextLabel: 'Advanced · Nuanced Expression',
+            }
+          : {
+              arabic: applySmartPartialTashkeel(
+                `تُعَدُّ فِكْرَةُ «${bareWord}» رَكِيزَةً أَساسِيَّةً فِي صِياغَةِ الوَعْيِ الثَّقافِيِّ المعاصِرِ.`
+              ),
+              english: `The concept of "${cleanMeaning}" is considered a fundamental pillar in shaping contemporary cultural awareness.`,
+              contextLabel: 'Advanced · Literary & Media Use',
+            };
+
+    const secondary: SentencePair =
+      cleanContext && countArabicWords(cleanContext) >= 8
+        ? {
+            arabic: cleanContext,
+            english: 'Original sentence from your Advanced reading passage.',
+            contextLabel: 'Passage Context',
+          }
+        : {
+            arabic: applySmartPartialTashkeel(
+              `لا غِنَى عَنْ تَوْظِيفِ «${bareWord}» فِي الحِوارِ الفِكْرِيِّ الرَّصِينِ.`
+            ),
+            english: `Employing "${cleanMeaning}" is indispensable in well-crafted intellectual dialogue.`,
+            contextLabel: 'Advanced · Idiomatic Context',
+          };
+
+    return [primary, secondary];
+  }
+
+  // Intermediate
+  const primary: SentencePair =
+    wordType === 'فعل'
+      ? {
+          arabic: applySmartPartialTashkeel(
+            `عِنْدَما ${bareWord} المُتَعَلِّمُ بِانْتِظامٍ، يُلاحِظُ تَقَدُّمًا واضِحًا فِي مَهاراتِهِ.`
+          ),
+          english: `When the learner practices regularly (${cleanMeaning}), they notice clear progress in their skills.`,
+          contextLabel: 'Intermediate · Practical Context',
+        }
+      : {
+          arabic: applySmartPartialTashkeel(
+            `تَحَدَّثْنا اليَوْمَ فِي النَّدْوَةِ عَنْ أَهَمِّيَّةِ «${bareWord}» فِي الحَياةِ اليَوْمِيَّةِ.`
+          ),
+          english: `Today at the seminar we discussed the importance of "${cleanMeaning}" in daily life.`,
+          contextLabel: 'Intermediate · Practical Context',
+        };
+
+  const secondary: SentencePair =
+    cleanContext && countArabicWords(cleanContext) >= 6
+      ? {
+          arabic: cleanContext,
+          english: 'Original sentence from your Intermediate reading passage.',
+          contextLabel: 'Passage Context',
+        }
+      : {
+          arabic: applySmartPartialTashkeel(
+            `يَسْتَخْدِمُ الكُتَّابُ كَلِمَةَ «${bareWord}» عِنْدَ وَصْفِ المَواقِفِ الواقِعِيَّةِ.`
+          ),
+          english: `Writers use "${cleanMeaning}" when describing real-life situations.`,
+          contextLabel: 'Intermediate · Conversational Use',
+        };
+
+  return [primary, secondary];
+}
+
+function selectLevelMatchedExamples(
+  match: LexiconEntry,
+  contextSentence: string | undefined,
+  level: ProficiencyLevel
+): SentencePair[] {
+  const formattedExisting = match.examples.map((ex, idx) => ({
+    arabic: applySmartPartialTashkeel(ex.arabic),
+    english: ex.english,
+    contextLabel:
+      ex.contextLabel || (idx === 0 ? 'Everyday Use' : 'Alternate Context'),
+  }));
+
+  const wordCounts = formattedExisting.map((ex) => countArabicWords(ex.arabic));
+  const wordType = match.wordType || inferArabicWordType(match.partOfSpeech);
+
+  if (level === 'beginner') {
+    const shortOnes = formattedExisting.filter((_, idx) => wordCounts[idx] <= 8);
+    if (shortOnes.length >= 2) {
+      return shortOnes.map((ex, idx) => ({
+        ...ex,
+        contextLabel: idx === 0 ? 'Beginner · Everyday Use' : 'Beginner · Clear Example',
+      }));
+    }
+    const synthesized = buildLevelFallbackExamples(
+      match.wordWithTashkeel,
+      match.englishMeaning,
+      wordType,
+      contextSentence,
+      'beginner'
+    );
+    return shortOnes.length === 1
+      ? [
+          { ...shortOnes[0], contextLabel: 'Beginner · Everyday Use' },
+          synthesized[0],
+        ]
+      : synthesized;
+  }
+
+  if (level === 'advanced') {
+    const richOnes = formattedExisting.filter((_, idx) => wordCounts[idx] >= 9);
+    if (richOnes.length >= 2) {
+      return richOnes.map((ex, idx) => ({
+        ...ex,
+        contextLabel: idx === 0 ? 'Advanced · Literary Context' : 'Advanced · Alternate Sense',
+      }));
+    }
+    const synthesized = buildLevelFallbackExamples(
+      match.wordWithTashkeel,
+      match.englishMeaning,
+      wordType,
+      contextSentence,
+      'advanced'
+    );
+    return richOnes.length === 1
+      ? [
+          { ...richOnes[0], contextLabel: 'Advanced · Nuanced Context' },
+          synthesized[0],
+        ]
+      : synthesized;
+  }
+
+  // Intermediate
+  return formattedExisting.map((ex, idx) => ({
+    ...ex,
+    contextLabel: idx === 0 ? 'Intermediate · Practical Use' : 'Alternate Context',
+  }));
+}
+
 export function lookupFallbackWord(
   rawWord: string,
   contextSentence?: string,
-  notice?: string
+  notice?: string,
+  level: ProficiencyLevel = 'intermediate'
 ): WordAnalysis {
   const cleanOriginal = rawWord.trim();
   const match = findExactLexiconMatch(cleanOriginal);
 
   if (match) {
+    const resolvedWordType = match.wordType || inferArabicWordType(match.partOfSpeech);
     return {
       word: cleanOriginal,
       ...match,
       wordWithTashkeel: applySmartPartialTashkeel(match.wordWithTashkeel),
-      wordType: match.wordType || inferArabicWordType(match.partOfSpeech),
+      vocalizedWord: stripFinalIrabForSpeech(match.wordWithTashkeel, {
+        wordType: resolvedWordType,
+        partOfSpeech: match.partOfSpeech,
+      }),
+      wordType: resolvedWordType,
       root: formatMinimalArabicRoot(match.root),
-      examples: [
-        {
-          arabic: applySmartPartialTashkeel(match.examples[0].arabic),
-          english: match.examples[0].english,
-          contextLabel: 'Everyday Use',
-        },
-        {
-          arabic: applySmartPartialTashkeel(match.examples[1].arabic),
-          english: match.examples[1].english,
-          contextLabel: 'Alternate Context',
-        },
-      ],
+      examples: selectLevelMatchedExamples(match, contextSentence, level),
+      level,
       source: 'lexicon',
       notice,
     };
   }
 
   const displayWord = applySmartPartialTashkeel(cleanOriginal || stripTashkeel(rawWord));
-  const contextSnippet = applySmartPartialTashkeel(
-    contextSentence?.trim() || `${displayWord} في جملةٍ مفيدةٍ.`
-  );
+  const cleanMeaning = stripTashkeel(displayWord);
 
   return {
     word: cleanOriginal,
     wordWithTashkeel: displayWord,
+    vocalizedWord: stripFinalIrabForSpeech(cleanOriginal || displayWord, {
+      wordType: 'اسم',
+      partOfSpeech: 'Arabic Lexeme',
+    }),
     partOfSpeech: 'Arabic Lexeme',
     wordType: 'اسم',
     root: '',
     transliteration: stripTashkeel(displayWord),
-    englishMeaning: `Contextual Arabic word (${stripTashkeel(displayWord)})`,
-    examples: [
-      {
-        arabic: contextSnippet,
-        english: 'Original reading passage sentence containing this word.',
-        contextLabel: 'Passage Context',
-      },
-      {
-        arabic: `سمعتُ كلمةَ «${displayWord}» في حديثٍ يوميٍّ معَ الأصدقاءِ.`,
-        english: 'I heard this word in an everyday conversation with friends.',
-        contextLabel: 'Everyday Conversation',
-      },
-    ],
+    englishMeaning: `Contextual Arabic word (${cleanMeaning})`,
+    examples: buildLevelFallbackExamples(
+      displayWord,
+      cleanMeaning,
+      'اسم',
+      contextSentence,
+      level
+    ),
+    level,
     source: 'lexicon',
     notice,
   };
@@ -927,6 +1138,9 @@ export function lookupFallbackWord(
 export interface LexiconDistractorItem {
   normalizedKey: string;
   wordWithTashkeel: string;
+  vocalizedWord: string;
+  wordType?: WordAnalysis['wordType'];
+  partOfSpeech: string;
   englishMeaning: string;
   transliteration: string;
 }
@@ -934,10 +1148,19 @@ export interface LexiconDistractorItem {
 export function getLexiconSamplePool(): LexiconDistractorItem[] {
   return Object.entries(RAW_LEXICON)
     .filter(([, entry]) => entry.partOfSpeech !== 'Preposition' && entry.partOfSpeech !== 'Conjunction')
-    .map(([key, entry]) => ({
-      normalizedKey: key,
-      wordWithTashkeel: entry.wordWithTashkeel,
-      englishMeaning: entry.englishMeaning,
-      transliteration: entry.transliteration,
-    }));
+    .map(([key, entry]) => {
+      const wordType = entry.wordType || inferArabicWordType(entry.partOfSpeech);
+      return {
+        normalizedKey: key,
+        wordWithTashkeel: entry.wordWithTashkeel,
+        vocalizedWord: stripFinalIrabForSpeech(entry.wordWithTashkeel, {
+          wordType,
+          partOfSpeech: entry.partOfSpeech,
+        }),
+        wordType,
+        partOfSpeech: entry.partOfSpeech,
+        englishMeaning: entry.englishMeaning,
+        transliteration: entry.transliteration,
+      };
+    });
 }

@@ -1,4 +1,4 @@
-import { AuthUser, UserRole } from '../types/arabic';
+import { AuthUser } from '../types/arabic';
 
 const ACCOUNTS_KEY = 'qalam_accounts_v1';
 const ACTIVE_USER_KEY = 'qalam_active_user_v1';
@@ -7,7 +7,6 @@ interface StoredAccount {
   id: string;
   name: string;
   email: string;
-  role: UserRole;
   salt: string;
   passwordHash: string;
   createdAt: number;
@@ -63,7 +62,15 @@ export function getActiveUser(): AuthUser | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(ACTIVE_USER_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AuthUser;
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      email: parsed.email,
+      isGuest: parsed.isGuest,
+      createdAt: parsed.createdAt,
+    };
   } catch {
     return null;
   }
@@ -85,26 +92,30 @@ export function saveActiveUser(user: AuthUser | null) {
 export async function registerWithEmail(params: {
   name: string;
   email: string;
+  confirmEmail: string;
   password: string;
-  role: UserRole;
 }): Promise<AuthUser> {
   const name = params.name.trim();
   const email = params.email.trim().toLowerCase();
+  const confirmEmail = params.confirmEmail.trim().toLowerCase();
   const password = params.password;
 
   if (!name || name.length < 2) {
-    throw new Error('Please enter your full name (at least 2 characters).');
+    throw new Error('يرجى إدخال اسم المستخدم (حرفين على الأقل) · Please enter a username.');
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error('Please enter a valid email address.');
+    throw new Error('يرجى إدخال بريد إلكتروني صحيح · Please enter a valid email address.');
+  }
+  if (email !== confirmEmail) {
+    throw new Error('البريد الإلكتروني وتأكيده غير متطابقين · Email addresses do not match.');
   }
   if (password.length < 6) {
-    throw new Error('Password must be at least 6 characters.');
+    throw new Error('كلمة المرور يجب أن تكون 6 أحرف على الأقل · Password must be at least 6 characters.');
   }
 
   const accounts = loadAccounts();
   if (accounts.some((a) => a.email === email)) {
-    throw new Error('An account with this email already exists. Please sign in instead.');
+    throw new Error('يوجد حساب مسجّل بهذا البريد الإلكتروني بالفعل · An account with this email already exists.');
   }
 
   const salt = generateSalt();
@@ -113,7 +124,6 @@ export async function registerWithEmail(params: {
     id: `usr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
     name,
     email,
-    role: params.role,
     salt,
     passwordHash,
     createdAt: Date.now(),
@@ -125,7 +135,6 @@ export async function registerWithEmail(params: {
     id: newAccount.id,
     name: newAccount.name,
     email: newAccount.email,
-    role: newAccount.role,
     createdAt: newAccount.createdAt,
   };
   saveActiveUser(user);
@@ -140,25 +149,24 @@ export async function loginWithEmail(params: {
   const password = params.password;
 
   if (!email || !password) {
-    throw new Error('Please enter both your email and password.');
+    throw new Error('يرجى إدخال البريد الإلكتروني وكلمة المرور · Please enter both email and password.');
   }
 
   const accounts = loadAccounts();
   const account = accounts.find((a) => a.email === email);
   if (!account) {
-    throw new Error('No account found for that email. Try registering or using Guest Demo.');
+    throw new Error('لم يتم العثور على حساب بهذا البريد · No account found for that email.');
   }
 
   const candidateHash = await hashPassword(password, account.salt);
   if (candidateHash !== account.passwordHash) {
-    throw new Error('Incorrect password. Please try again.');
+    throw new Error('كلمة المرور غير صحيحة · Incorrect password. Please try again.');
   }
 
   const user: AuthUser = {
     id: account.id,
     name: account.name,
     email: account.email,
-    role: account.role,
     createdAt: account.createdAt,
   };
   saveActiveUser(user);
@@ -170,7 +178,6 @@ export function loginAsGuest(): AuthUser {
     id: 'guest-demo',
     name: 'Guest Learner',
     email: 'guest@qalam.local',
-    role: 'student',
     isGuest: true,
     createdAt: Date.now(),
   };

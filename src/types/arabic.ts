@@ -6,9 +6,7 @@ export type PracticeStatus = 'needs_review' | 'learned';
 
 export type SrsRating = 'hard' | 'good' | 'easy';
 
-export type ActiveTab = 'lessons' | 'history' | 'vocabulary' | 'practice';
-
-export type UserRole = 'student' | 'teacher';
+export type ActiveTab = 'lessons' | 'vocabulary' | 'exams' | 'conversation' | 'history';
 
 export type LessonContentType = 'text' | 'video';
 
@@ -16,7 +14,6 @@ export interface AuthUser {
   id: string;
   name: string;
   email: string;
-  role: UserRole;
   isGuest?: boolean;
   createdAt: number;
 }
@@ -30,12 +27,14 @@ export interface SentencePair {
 export interface WordAnalysis {
   word: string;
   wordWithTashkeel: string;
+  vocalizedWord?: string;
   partOfSpeech: string;
   wordType?: string;
   root?: string;
   transliteration: string;
   englishMeaning: string;
   examples: SentencePair[];
+  level?: ProficiencyLevel;
   source?: 'gemini' | 'lexicon' | 'cache';
   notice?: string;
 }
@@ -45,6 +44,7 @@ export interface VocabCard extends WordAnalysis {
   normalizedKey: string;
   lessonId?: string;
   lessonTitle?: string;
+  level?: ProficiencyLevel;
   status: PracticeStatus;
   createdAt: number;
   lastReviewedAt?: number;
@@ -106,6 +106,62 @@ export interface LessonQuizResponse {
   notice?: string;
 }
 
+export interface ExamQuestion {
+  id: string;
+  type: 'meaning' | 'fill_blank' | 'usage';
+  targetCardId?: string;
+  targetWordAr: string;
+  promptAr: string;
+  promptEn: string;
+  contextSentenceAr?: string;
+  options: string[];
+  correctIndex: number;
+  explanationEn: string;
+  explanationAr: string;
+}
+
+export interface GeneratedExam {
+  titleEn: string;
+  titleAr: string;
+  level: ProficiencyLevel;
+  questions: ExamQuestion[];
+  source: 'gemini' | 'fallback';
+  notice?: string;
+}
+
+export interface ConversationDialogueTurn {
+  id: string;
+  speakerAr: string;
+  speakerEn: string;
+  role: 'learner' | 'partner';
+  arabic: string;
+  transliteration: string;
+  english: string;
+  usedWords: string[];
+}
+
+export interface ConversationPracticeSentence {
+  id: string;
+  arabic: string;
+  english: string;
+  focusWordAr: string;
+  tipEn: string;
+}
+
+export interface GeneratedConversation {
+  scenarioId: string;
+  titleAr: string;
+  titleEn: string;
+  settingAr: string;
+  settingEn: string;
+  level: ProficiencyLevel;
+  targetWords: string[];
+  turns: ConversationDialogueTurn[];
+  practiceSentences: ConversationPracticeSentence[];
+  source: 'gemini' | 'fallback';
+  notice?: string;
+}
+
 export interface ReadingHistoryItem {
   lessonId: string;
   titleEn: string;
@@ -121,7 +177,7 @@ export interface ReadingHistoryItem {
 }
 
 export interface NoteContextTag {
-  type: 'lesson' | 'vocab' | 'general';
+  type: 'lesson' | 'vocab' | 'exam' | 'conversation' | 'general';
   label: string;
   refId?: string;
 }

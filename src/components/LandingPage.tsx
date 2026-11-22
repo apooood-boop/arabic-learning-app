@@ -24,7 +24,7 @@ const CORE_FEATURES = [
     descriptionEn:
       'Vowelizes essential case endings, shaddah, and long vowels so you transition comfortably to real-world Arabic texts.',
     Icon: BookOpen,
-    iconTint: 'bg-rose-50 text-[#E11D48] border-rose-100',
+    iconTint: 'bg-[#EEF2E9] text-[#2D3B22] border-[#DCE5D3]',
   },
   {
     number: '02.',
@@ -35,7 +35,7 @@ const CORE_FEATURES = [
     descriptionEn:
       'Tap or hold any Arabic word while reading to see its contextual English meaning, transliteration, and natural usage examples.',
     Icon: Languages,
-    iconTint: 'bg-purple-50 text-[#4C1D95] border-purple-100',
+    iconTint: 'bg-[#FBF3DC] text-[#9A6F14] border-[#E8B948]/50',
   },
   {
     number: '03.',
@@ -46,7 +46,7 @@ const CORE_FEATURES = [
     descriptionEn:
       'Turn saved words into interactive 3D flashcards with word type, root clues, matching drills, multiple-choice quizzes, and SRS intervals.',
     Icon: Layers,
-    iconTint: 'bg-rose-50 text-[#E11D48] border-rose-100',
+    iconTint: 'bg-[#EEF2E9] text-[#2D3B22] border-[#DCE5D3]',
   },
   {
     number: '04.',
@@ -57,7 +57,7 @@ const CORE_FEATURES = [
     descriptionEn:
       'Follow spoken Arabic word-by-word at 0.75x or 1x speed, or scrub through YouTube video lessons synced directly with readable transcripts.',
     Icon: Headphones,
-    iconTint: 'bg-purple-50 text-[#4C1D95] border-purple-100',
+    iconTint: 'bg-[#FBF3DC] text-[#9A6F14] border-[#E8B948]/50',
   },
 ] as const;
 
@@ -87,22 +87,22 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
     'في الصَّباحِ الباكِرِ، يفتَحُ الباعةُ أبوابَ السّوقِ القَديمِ وتفوحُ رائِحةُ القَهوةِ العَرَبيّةِ.';
 
   return (
-    <div className="flex-1">
-      {/* 1. Hero Section */}
-      <section className="relative overflow-hidden border-b border-[#ECE8EF] bg-white">
-        <div className="islamic-geo-pattern-light pointer-events-none absolute inset-0 opacity-75" />
-        <div className="pointer-events-none absolute -top-28 -right-24 h-72 w-72 rounded-full bg-[#F43F5E]/10 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-28 -left-24 h-72 w-72 rounded-full bg-[#4C1D95]/10 blur-3xl" />
+    <div className="flex-1 bg-[#FAFBF8]">
+      {/* 1. Rich Dark Olive Gradient Hero Section */}
+      <section className="relative overflow-hidden border-b border-[#3E522D] bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#FAFBF8]">
+        <div className="islamic-geo-pattern pointer-events-none absolute inset-0 opacity-45" />
+        <div className="pointer-events-none absolute -top-28 -right-24 h-80 w-80 rounded-full bg-[#D4A338]/15 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-28 -left-24 h-80 w-80 rounded-full bg-[#DCE5D3]/10 blur-3xl" />
 
         <div className="relative mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8 lg:py-20">
           <div className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:gap-12 items-stretch">
             {/* Editorial Proposition Column */}
-            <div className="lg:col-span-7 flex flex-col justify-center space-y-6">
+            <div className="lg:col-span-7 flex flex-col justify-center space-y-6 animate-fade-slide-up">
               <div className="space-y-4">
                 <p
                   dir="rtl"
                   lang="ar"
-                  className="text-sm font-semibold text-[#E11D48]"
+                  className="font-arabic-cairo text-sm font-bold text-[#E8B948]"
                 >
                   منصّة قَلَم لتعلّم اللّغة العربيّة عبر القراءة السّياقيّة
                 </p>
@@ -110,7 +110,7 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                 <h1
                   dir="rtl"
                   lang="ar"
-                  className="font-arabic-scheherazade text-4xl sm:text-5xl lg:text-[54px] font-bold text-[#241734] leading-[1.45] [text-wrap:balance]"
+                  className="font-arabic-scheherazade text-4xl sm:text-5xl lg:text-[54px] font-bold text-white leading-[1.45] [text-wrap:balance]"
                 >
                   اقرأ العربيّةَ بفهمٍ عميقٍ، واستمع إليها في سياقِها الطّبيعيّ
                 </h1>
@@ -118,12 +118,12 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                 <p
                   dir="rtl"
                   lang="ar"
-                  className="text-base sm:text-lg text-zinc-700 leading-relaxed max-w-2xl"
+                  className="font-arabic-cairo text-base sm:text-lg text-[#EEF2E9] leading-relaxed max-w-2xl"
                 >
                   تساعدك منصّةُ قَلَم على اكتسابِ العربيّةِ بطريقةٍ طبيعيّةٍ عبر نصوصٍ متدرّجةٍ بالتّشكيل الجزئيّ الذّكيّ، وترجمةٍ سياقيّةٍ فوريّةٍ، وبطاقاتِ مراجعةٍ تُرسّخُ المفرداتِ في ذاكرتك.
                 </p>
 
-                <p className="text-sm sm:text-base text-zinc-500 leading-relaxed max-w-xl">
+                <p className="text-sm sm:text-base text-[#DCE5D3] leading-relaxed max-w-xl">
                   Build lasting Arabic reading and listening fluency through partial tashkeel texts, one-tap contextual translations, synchronized audio, and smart spaced-repetition practice.
                 </p>
               </div>
@@ -132,29 +132,29 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                 <button
                   type="button"
                   onClick={() => onGetStarted('register')}
-                  className="inline-flex min-h-[48px] items-center justify-center gap-2.5 rounded-xl bg-[#E11D48] px-6 py-3 text-sm sm:text-base font-semibold text-white hover:bg-[#BE123C] shadow-sm transition-colors cursor-pointer touch-manipulation active:scale-[0.99] whitespace-nowrap"
+                  className="inline-flex min-h-[48px] items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-[#D4A338] to-[#E8B948] px-6 py-3 text-sm sm:text-base font-bold text-[#1F2718] hover:brightness-105 shadow-md transition-all cursor-pointer touch-manipulation active:scale-[0.98] whitespace-nowrap"
                 >
                   <span>ابدأ التعلم الآن / Get Started</span>
-                  <ArrowRight className="h-4 w-4 text-rose-100" aria-hidden="true" />
+                  <ArrowRight className="h-4 w-4 text-[#1F2718]" aria-hidden="true" />
                 </button>
 
                 <button
                   type="button"
                   onClick={() => onGetStarted('login')}
-                  className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-[#ECE8EF] bg-white px-5 py-3 text-sm font-semibold text-[#4C1D95] hover:bg-purple-50/70 hover:border-purple-200 transition-colors cursor-pointer touch-manipulation whitespace-nowrap"
+                  className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-5 py-3 text-sm font-semibold text-white hover:bg-white/20 transition-all cursor-pointer touch-manipulation active:scale-[0.98] whitespace-nowrap"
                 >
-                  <LogIn className="h-4 w-4 text-[#E11D48]" aria-hidden="true" />
+                  <LogIn className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
                   <span>تسجيل الدخول · Sign In</span>
                 </button>
               </div>
             </div>
 
             {/* Static Product Reading Preview Card (Zero Student Metrics) */}
-            <div className="lg:col-span-5 flex flex-col justify-center">
-              <div className="rounded-2xl border border-[#ECE8EF] bg-[#FDFBFC] p-5 sm:p-6 shadow-sm space-y-5">
-                <div className="flex items-center justify-between gap-2 border-b border-[#ECE8EF] pb-3 text-xs text-zinc-500">
-                  <span className="font-semibold text-[#4C1D95]">Interactive Reading Preview</span>
-                  <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-base text-zinc-600">
+            <div className="lg:col-span-5 flex flex-col justify-center animate-fade-slide-up animate-delay-150">
+              <div className="rounded-2xl border border-[#DCE5D3]/35 bg-[#FAFBF8] p-5 sm:p-6 shadow-2xl space-y-5 text-[#1F2718]">
+                <div className="flex items-center justify-between gap-2 border-b border-[#DCE5D3] pb-3 text-xs text-[#5A6552]">
+                  <span className="font-semibold text-[#2D3B22]">Interactive Reading Preview</span>
+                  <span dir="rtl" lang="ar" className="font-arabic-cairo text-sm font-bold text-[#3B4D2B]">
                     نموذج القراءة الذّكيّة
                   </span>
                 </div>
@@ -162,13 +162,13 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                 <div
                   dir="rtl"
                   lang="ar"
-                  className="font-arabic-scheherazade text-2xl sm:text-[27px] leading-[2.2] text-[#241734] text-right"
+                  className="font-arabic-scheherazade text-2xl sm:text-[27px] leading-[2.2] text-[#1F2718] text-right"
                 >
                   {applySmartPartialTashkeel(sampleSentence).split('القَهوةِ').map((part, idx, arr) => (
                     <span key={idx}>
                       {part}
                       {idx < arr.length - 1 && (
-                        <span className="mx-0.5 inline-block rounded-lg bg-rose-100 px-2 py-0.5 text-[#4C1D95] ring-2 ring-[#E11D48]/35">
+                        <span className="mx-0.5 inline-block rounded-lg bg-[#FBF3DC] px-2 py-0.5 text-[#2D3B22] ring-2 ring-[#D4A338]/70">
                           القَهوةِ
                         </span>
                       )}
@@ -176,25 +176,25 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                   ))}
                 </div>
 
-                <div className="rounded-xl border border-[#ECE8EF] bg-white p-4 space-y-2.5">
+                <div className="rounded-xl border border-[#DCE5D3] bg-white p-4 space-y-2.5 shadow-2xs">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#241734]">
+                      <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#1F2718]">
                         القَهوةُ
                       </span>
-                      <span className="text-xs text-zinc-500">·</span>
-                      <span className="font-mono text-xs text-zinc-500">al-qahwa</span>
+                      <span className="text-xs text-[#6B7861]">·</span>
+                      <span className="font-mono text-xs text-[#5A6552]">al-qahwa</span>
                     </div>
-                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-rose-50 text-[#E11D48]" aria-hidden="true">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]" aria-hidden="true">
                       <Volume2 className="h-3.5 w-3.5" />
                     </span>
                   </div>
 
-                  <p className="text-sm font-bold text-[#4C1D95]">the coffee</p>
+                  <p className="text-sm font-bold text-[#2D3B22]">the coffee</p>
 
-                  <div className="flex items-center justify-between gap-2 border-t border-[#ECE8EF] pt-2 text-xs text-zinc-500">
-                    <span>نوع الكلمة: اسم · الجذر: ق - هـ - و</span>
-                    <span className="text-[#E11D48] font-medium">Contextual lookup</span>
+                  <div className="flex items-center justify-between gap-2 border-t border-[#EEF2E9] pt-2 text-xs text-[#5A6552]">
+                    <span className="font-arabic-cairo">نوع الكلمة: اسم · الجذر: ق - هـ - و</span>
+                    <span className="text-[#9A6F14] font-semibold">Contextual lookup</span>
                   </div>
                 </div>
               </div>
@@ -206,31 +206,33 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
       {/* 2. Core Features Showcase Grid */}
       <section id="features" className="scroll-mt-20 py-14 sm:py-16">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 space-y-8">
-          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between animate-fade-slide-up">
             <div className="space-y-1.5">
               <h2
                 dir="rtl"
                 lang="ar"
-                className="font-arabic-scheherazade text-3xl sm:text-4xl font-bold text-[#4C1D95]"
+                className="font-arabic-scheherazade text-3xl sm:text-4xl font-bold text-[#2D3B22]"
               >
                 مزايا المنصّة الأساسيّة
               </h2>
-              <p className="font-display text-xl sm:text-2xl font-bold text-[#241734] [text-wrap:balance]">
+              <p className="font-display text-xl sm:text-2xl font-bold text-[#1F2718] [text-wrap:balance]">
                 Focused tools built for comprehension and long-term retention
               </p>
             </div>
-            <p className="text-xs sm:text-sm text-zinc-500 max-w-md">
+            <p className="text-xs sm:text-sm text-[#5A6552] max-w-md">
               Everything works together in one calm Arabic reading workspace—from vowelized text to spaced repetition.
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            {CORE_FEATURES.map((feature) => {
+            {CORE_FEATURES.map((feature, idx) => {
               const IconComponent = feature.Icon;
               return (
                 <article
                   key={feature.number}
-                  className="rounded-2xl border border-[#ECE8EF] bg-white p-6 sm:p-7 shadow-2xs transition-colors hover:border-purple-200 flex flex-col justify-between gap-4"
+                  className={`animate-fade-slide-up rounded-2xl border border-[#DCE5D3] bg-white p-6 sm:p-7 shadow-xs transition-all duration-200 hover:-translate-y-0.5 hover:border-[#3E522D]/50 hover:shadow-md flex flex-col justify-between gap-4 ${
+                    idx % 2 === 1 ? 'animate-delay-75' : ''
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div
@@ -238,7 +240,7 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                     >
                       <IconComponent className="h-5 w-5" aria-hidden="true" />
                     </div>
-                    <span className="font-mono text-xs font-semibold text-zinc-400 tabular-nums">
+                    <span className="font-mono text-xs font-semibold text-[#6B7861] tabular-nums">
                       {feature.number}
                     </span>
                   </div>
@@ -247,21 +249,21 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                     <h3
                       dir="rtl"
                       lang="ar"
-                      className="font-arabic-scheherazade text-2xl sm:text-[26px] font-bold text-[#241734] text-right leading-snug"
+                      className="font-arabic-scheherazade text-2xl sm:text-[26px] font-bold text-[#1F2718] text-right leading-snug"
                     >
                       {feature.titleAr}
                     </h3>
-                    <h4 className="font-display text-base font-bold text-[#4C1D95]">
+                    <h4 className="font-display text-base font-bold text-[#2D3B22]">
                       {feature.titleEn}
                     </h4>
                     <p
                       dir="rtl"
                       lang="ar"
-                      className="text-sm text-zinc-700 leading-relaxed text-right"
+                      className="font-arabic-cairo text-sm text-[#3F4A37] leading-relaxed text-right"
                     >
                       {feature.descriptionAr}
                     </p>
-                    <p className="text-xs sm:text-sm text-zinc-500 leading-relaxed">
+                    <p className="text-xs sm:text-sm text-[#5A6552] leading-relaxed">
                       {feature.descriptionEn}
                     </p>
                   </div>
@@ -273,16 +275,16 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
       </section>
 
       {/* 3. Clear 3-Step Learning Flow */}
-      <section id="how-it-works" className="scroll-mt-20 border-y border-[#ECE8EF] bg-white py-12 sm:py-14">
+      <section id="how-it-works" className="scroll-mt-20 border-y border-[#DCE5D3] bg-[#EEF2E9]/55 py-12 sm:py-14">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 space-y-7">
           <div className="flex flex-wrap items-baseline justify-between gap-3">
-            <h2 className="font-display text-xl sm:text-2xl font-bold text-[#241734]">
+            <h2 className="font-display text-xl sm:text-2xl font-bold text-[#1F2718]">
               How Your Study Flow Works
             </h2>
             <span
               dir="rtl"
               lang="ar"
-              className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]"
+              className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]"
             >
               كيف تبدأ رحلتك في قَلَم؟
             </span>
@@ -292,22 +294,22 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
             {STUDY_STEPS.map((item) => (
               <div
                 key={item.step}
-                className="rounded-2xl border border-[#ECE8EF] bg-[#FDFBFC] p-5 space-y-2"
+                className="rounded-2xl border border-[#DCE5D3] bg-white p-5 space-y-2 shadow-2xs transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm"
               >
-                <span className="font-mono text-xs font-bold text-[#E11D48] tabular-nums">
+                <span className="inline-flex items-center justify-center rounded-lg bg-[#FBF3DC] px-2.5 py-0.5 font-mono text-xs font-bold text-[#9A6F14] tabular-nums">
                   {item.step}
                 </span>
                 <h3
                   dir="rtl"
                   lang="ar"
-                  className="font-arabic-scheherazade text-xl font-bold text-[#4C1D95] text-right"
+                  className="font-arabic-scheherazade text-xl font-bold text-[#2D3B22] text-right"
                 >
                   {item.titleAr}
                 </h3>
-                <h4 className="font-display text-sm font-bold text-[#241734]">
+                <h4 className="font-display text-sm font-bold text-[#1F2718]">
                   {item.titleEn}
                 </h4>
-                <p className="text-xs sm:text-sm text-zinc-600 leading-relaxed">
+                <p className="text-xs sm:text-sm text-[#5A6552] leading-relaxed">
                   {item.text}
                 </p>
               </div>
@@ -319,13 +321,13 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
       {/* 4. Final Call-to-Action (CTA) */}
       <section className="py-12 sm:py-16">
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#3B0764] via-[#4C1D95] to-[#581C87] px-6 py-10 sm:px-12 sm:py-14 text-white shadow-lg">
-            <div className="islamic-geo-pattern pointer-events-none absolute inset-0 opacity-35" />
+          <div className="relative overflow-hidden rounded-2xl bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] px-6 py-10 sm:px-12 sm:py-14 text-white shadow-lg">
+            <div className="islamic-geo-pattern pointer-events-none absolute inset-0 opacity-40" />
 
             <div className="relative mx-auto max-w-3xl text-center space-y-5">
-              <div className="inline-flex items-center gap-2 text-xs font-semibold text-rose-200">
-                <Sparkles className="h-4 w-4 text-rose-300" aria-hidden="true" />
-                <span>Free Student &amp; Teacher Accounts · حساب مجاني بالكامل</span>
+              <div className="inline-flex items-center gap-2 text-xs font-semibold text-[#E8B948]">
+                <Sparkles className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
+                <span className="font-arabic-cairo">Free Personal Account · حساب مجاني بالكامل</span>
               </div>
 
               <h2
@@ -336,7 +338,7 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                 أنشئ حسابك المجاني واختر مستواك الآن
               </h2>
 
-              <p className="mx-auto max-w-xl text-sm sm:text-base text-purple-100/90 leading-relaxed">
+              <p className="mx-auto max-w-xl text-sm sm:text-base text-[#DCE5D3] leading-relaxed">
                 Sign up in seconds to unlock Beginner, Intermediate, and Advanced Arabic lessons, build your personal SRS flashcard deck, and keep study notes across every session.
               </p>
 
@@ -344,18 +346,18 @@ export function LandingPage({ onGetStarted }: LandingPageProps) {
                 <button
                   type="button"
                   onClick={() => onGetStarted('register')}
-                  className="inline-flex min-h-[48px] w-full sm:w-auto items-center justify-center gap-2.5 rounded-xl bg-[#E11D48] px-7 py-3 text-sm sm:text-base font-semibold text-white hover:bg-[#BE123C] shadow-md transition-colors cursor-pointer touch-manipulation whitespace-nowrap"
+                  className="inline-flex min-h-[48px] w-full sm:w-auto items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-[#D4A338] to-[#E8B948] px-7 py-3 text-sm sm:text-base font-bold text-[#1F2718] hover:brightness-105 shadow-md transition-all cursor-pointer touch-manipulation active:scale-[0.98] whitespace-nowrap"
                 >
                   <span>ابدأ التعلم الآن / Get Started</span>
-                  <ArrowRight className="h-4 w-4 text-rose-100" aria-hidden="true" />
+                  <ArrowRight className="h-4 w-4 text-[#1F2718]" aria-hidden="true" />
                 </button>
 
                 <button
                   type="button"
                   onClick={() => onGetStarted('login')}
-                  className="inline-flex min-h-[48px] w-full sm:w-auto items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-6 py-3 text-sm font-semibold text-white hover:bg-white/20 transition-colors cursor-pointer touch-manipulation whitespace-nowrap"
+                  className="inline-flex min-h-[48px] w-full sm:w-auto items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-6 py-3 text-sm font-semibold text-white hover:bg-white/20 transition-all cursor-pointer touch-manipulation active:scale-[0.98] whitespace-nowrap"
                 >
-                  <LogIn className="h-4 w-4 text-rose-200" aria-hidden="true" />
+                  <LogIn className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
                   <span>Already have an account? Sign In</span>
                 </button>
               </div>

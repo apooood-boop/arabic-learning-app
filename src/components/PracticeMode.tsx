@@ -6,6 +6,7 @@ import {
   Flame,
   HelpCircle,
   Layers,
+  Loader2,
   NotebookPen,
   RotateCcw,
   RotateCw,
@@ -13,21 +14,28 @@ import {
   Volume2,
   Zap,
 } from 'lucide-react';
+import { getLexiconSpeechText } from '../data/fallbackLexicon';
 import { NoteContextTag, PracticeStatus, SrsRating, VocabCard } from '../types/arabic';
-import { speakArabic, stopArabicSpeech, stripTashkeel } from '../utils/arabic';
+import { speakArabic, stopArabicSpeech, stripTashkeel, unlockArabicAudioContext } from '../utils/arabic';
 import { Flashcard3D } from './Flashcard3D';
 import { GameModeType, QuizMode, SpeedMatchGame } from './VocabGames';
+
+export type PracticeScope = 'all' | 'hard' | 'needs_review';
 
 interface PracticeModeProps {
   cards: VocabCard[];
   speechRate: number;
+  initialScope?: PracticeScope;
+  scopeRequestSeq?: number;
   onUpdateStatus: (id: string, status: PracticeStatus) => void;
+  onToggleDifficult?: (id: string) => void;
   onRateSrs: (id: string, rating: SrsRating) => void;
   onGoToLessons: () => void;
   onGoToVocabulary: () => void;
   onRecordReview: () => void;
   notesCount?: number;
   onOpenNotes?: (context?: NoteContextTag) => void;
+  embeddedInVocab?: boolean;
 }
 
 function getSrsPriorityScore(card: VocabCard, now: number): number {
@@ -42,9 +50,15 @@ function getSrsPriorityScore(card: VocabCard, now: number): number {
 
 function buildPrioritizedQueueIds(
   cards: VocabCard[],
-  scope: 'all' | 'needs_review'
+  scope: PracticeScope
 ): string[] {
   const now = Date.now();
+  if (scope === 'hard') {
+    return cards
+      .filter((c) => c.srsRating === 'hard')
+      .map((c) => c.id);
+  }
+
   const baseList =
     scope === 'needs_review'
       ? cards.filter(
@@ -70,18 +84,22 @@ function buildPrioritizedQueueIds(
 export function PracticeMode({
   cards,
   speechRate,
+  initialScope = 'all',
+  scopeRequestSeq = 0,
   onUpdateStatus,
+  onToggleDifficult,
   onRateSrs,
   onGoToLessons,
   onGoToVocabulary,
   onRecordReview,
   notesCount = 0,
   onOpenNotes,
+  embeddedInVocab = false,
 }: PracticeModeProps) {
   const [gameMode, setGameMode] = useState<GameModeType>('classic');
-  const [scope, setScope] = useState<'all' | 'needs_review'>('all');
+  const [scope, setScope] = useState<PracticeScope>(initialScope);
   const [sessionQueueIds, setSessionQueueIds] = useState<string[]>(() =>
-    buildPrioritizedQueueIds(cards, 'all')
+    buildPrioritizedQueueIds(cards, initialScope)
   );
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -91,8 +109,9 @@ export function PracticeMode({
     easy: number;
   }>({ hard: 0, good: 0, easy: 0 });
   const [isComplete, setIsComplete] = useState(false);
-  const [isPlayingWord, setIsPlayingWord] = useState(false);
+  const [wordAudioState, setWordAudioState] = useState<'idle' | 'loading' | 'playing'>('idle');
   const requeuedInSessionRef = useRef<Set<string>>(new Set());
+  const prevSeqRef = useRef(scopeRequestSeq);
 
   const cardById = useMemo(() => {
     const map = new Map<string, VocabCard>();
@@ -105,7 +124,7 @@ export function PracticeMode({
     const validIds = new Set(cards.map((c) => c.id));
     setSessionQueueIds((prev) => {
       const filtered = prev.filter((id) => validIds.has(id));
-      if (filtered.length === 0 && cards.length > 0) {
+      if (filtered.length === 0 && cards.length > 0 && scope !== 'hard') {
         return buildPrioritizedQueueIds(cards, scope);
       }
       return filtered;
@@ -123,7 +142,7 @@ export function PracticeMode({
   const currentCard = deck[currentIndex] ?? null;
 
   const resetSession = useCallback(
-    (nextScope?: 'all' | 'needs_review') => {
+    (nextScope?: PracticeScope) => {
       const targetScope = nextScope ?? scope;
       if (nextScope) setScope(nextScope);
       requeuedInSessionRef.current = new Set();
@@ -135,6 +154,14 @@ export function PracticeMode({
     },
     [cards, scope]
   );
+
+  useEffect(() => {
+    if (prevSeqRef.current !== scopeRequestSeq) {
+      prevSeqRef.current = scopeRequestSeq;
+      setGameMode('classic');
+      resetSession(initialScope);
+    }
+  }, [scopeRequestSeq, initialScope, resetSession]);
 
   const handleSrsRate = useCallback(
     (rating: SrsRating) => {
@@ -180,14 +207,29 @@ export function PracticeMode({
         e.preventDefault();
         setIsFlipped((prev) => !prev);
       } else if (e.key === 'l' || e.key === 'L') {
-        if (isPlayingWord) {
+        unlockArabicAudioContext();
+        if (wordAudioState !== 'idle') {
           stopArabicSpeech();
-          setIsPlayingWord(false);
+          setWordAudioState('idle');
         } else {
           speakArabic(currentCard.wordWithTashkeel, {
             rate: speechRate,
-            onStart: () => setIsPlayingWord(true),
-            onEnd: () => setIsPlayingWord(false),
+            mode: 'word',
+            vocalizedText:
+              currentCard.vocalizedWord ||
+              getLexiconSpeechText(
+                currentCard.word,
+                currentCard.wordWithTashkeel,
+                currentCard.wordType,
+                currentCard.partOfSpeech
+              ),
+            meaningHint: currentCard.englishMeaning,
+            wordType: currentCard.wordType,
+            partOfSpeech: currentCard.partOfSpeech,
+            onLoading: () => setWordAudioState('loading'),
+            onStart: () => setWordAudioState('playing'),
+            onEnd: () => setWordAudioState('idle'),
+            onError: () => setWordAudioState('idle'),
           });
         }
       } else if (isFlipped && e.key === '1') {
@@ -200,22 +242,25 @@ export function PracticeMode({
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [gameMode, currentCard, isComplete, isFlipped, isPlayingWord, speechRate, handleSrsRate]);
+  }, [gameMode, currentCard, isComplete, isFlipped, wordAudioState, speechRate, handleSrsRate]);
 
   if (cards.length === 0) {
     return (
-      <section className="rounded-xl border border-[#ECE8EF] bg-white px-6 py-16 text-center max-w-2xl mx-auto shadow-sm">
-        <h1 className="font-display text-2xl font-semibold text-[#241734]">
+      <section className="rounded-2xl border border-[#DCE5D3] bg-white px-6 py-16 text-center max-w-2xl mx-auto shadow-sm animate-fade-slide-up">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EEF2E9] text-[#2D3B22]">
+          <Layers className="h-6 w-6" aria-hidden="true" />
+        </div>
+        <h1 className="font-display text-2xl font-semibold text-[#1F2718]">
           No Cards Ready for Practice
         </h1>
-        <p className="mt-2 text-sm text-zinc-600 max-w-md mx-auto">
+        <p className="mt-2 text-sm text-[#5A6552] max-w-md mx-auto">
           Save Arabic words from any lesson into My Vocabulary first, then return here to
           practice active recall with spaced repetition flashcards, quizzes, and speed matching.
         </p>
         <button
           type="button"
           onClick={onGoToLessons}
-          className="mt-6 rounded-xl bg-[#E11D48] px-5 py-2.5 text-sm font-medium text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+          className="mt-6 rounded-xl bg-[#2D3B22] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#3E522D] transition-colors cursor-pointer"
         >
           Go to Lessons
         </button>
@@ -224,6 +269,7 @@ export function PracticeMode({
   }
 
   const now = Date.now();
+  const hardCount = cards.filter((c) => c.srsRating === 'hard').length;
   const dueOrHardCount = cards.filter(
     (c) =>
       c.status === 'needs_review' ||
@@ -232,132 +278,208 @@ export function PracticeMode({
   ).length;
 
   return (
-    <section className="mx-auto max-w-3xl space-y-6">
+    <section className="mx-auto max-w-3xl space-y-6 animate-fade-slide-up">
       {/* Top Controls + Game Mode Switcher */}
-      <div className="flex flex-col gap-4 border-b border-[#ECE8EF]/80 pb-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="flex items-baseline gap-2.5">
-              <h1 className="font-display text-3xl font-bold tracking-tight text-[#241734]">
-                Practice Arena
-              </h1>
-              <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]">
-                أَلْعَابُ التَّعَلُّمِ
-              </span>
-            </div>
-            <p className="text-xs text-zinc-500 mt-1">
-              Smart Spaced Repetition (SRS) prioritizes Hard cards first, paired with Quizzes and Speed Match.
+      {embeddedInVocab ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] px-4 py-3">
+          <div className="space-y-0.5">
+            <p className="text-xs font-bold text-[#1F2718]">
+              {scope === 'hard'
+                ? 'Focused Hard Cards Queue · البطاقات الصعبة'
+                : 'Smart Spaced Repetition (SRS)'}
+            </p>
+            <p className="text-[11px] text-[#5A6552]">
+              {scope === 'hard'
+                ? 'Reviewing words you marked as Difficult / Hard while studying.'
+                : 'Prioritizes Hard and due cards first for maximum retention.'}
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {onOpenNotes && (
-              <button
-                type="button"
-                onClick={() =>
-                  onOpenNotes({
-                    type: 'vocab',
-                    label:
-                      gameMode === 'classic' && currentCard
-                        ? `كلمة: ${stripTashkeel(currentCard.wordWithTashkeel)}`
-                        : 'التدريب · Practice Arena',
-                    refId: gameMode === 'classic' && currentCard ? currentCard.id : undefined,
-                  })
-                }
-                className="inline-flex items-center gap-1.5 rounded-xl border border-purple-200 bg-white px-3.5 py-2 text-xs font-semibold text-[#4C1D95] hover:bg-purple-50 shadow-2xs transition-colors cursor-pointer"
-              >
-                <NotebookPen className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
-                <span>ملاحظاتي · Notes</span>
-                {notesCount > 0 && (
-                  <span className="font-mono text-[11px] tabular-nums text-[#E11D48]">
-                    ({notesCount})
-                  </span>
-                )}
-              </button>
-            )}
-
-            {(gameMode === 'classic' || gameMode === 'quiz') && (
-              <div className="inline-flex items-center gap-1 rounded-xl border border-[#ECE8EF] bg-white p-1 shadow-2xs">
-                <button
-                  type="button"
-                  onClick={() => resetSession('all')}
-                  className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
-                    scope === 'all'
-                      ? 'bg-[#4C1D95] text-white'
-                      : 'text-zinc-600 hover:text-[#241734]'
-                  }`}
-                >
-                  All Cards ({cards.length})
-                </button>
-                <button
-                  type="button"
-                  disabled={dueOrHardCount === 0}
-                  onClick={() => resetSession('needs_review')}
-                  className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-45 whitespace-nowrap cursor-pointer ${
-                    scope === 'needs_review'
-                      ? 'bg-[#E11D48] text-white'
-                      : 'text-zinc-600 hover:text-[#241734]'
-                  }`}
-                >
-                  Due / Hard ({dueOrHardCount})
-                </button>
-              </div>
-            )}
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[#DCE5D3] bg-white p-1 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => resetSession('all')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                scope === 'all'
+                  ? 'bg-[#2D3B22] text-white'
+                  : 'text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              All Cards ({cards.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => resetSession('hard')}
+              className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                scope === 'hard'
+                  ? 'bg-[#C2410C] text-white'
+                  : 'text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              <Flame
+                className={`h-3 w-3 ${scope === 'hard' ? 'text-white' : 'text-[#C2410C]'}`}
+                aria-hidden="true"
+              />
+              <span>Difficult / Hard ({hardCount})</span>
+            </button>
+            <button
+              type="button"
+              disabled={dueOrHardCount === 0}
+              onClick={() => resetSession('needs_review')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-45 whitespace-nowrap cursor-pointer ${
+                scope === 'needs_review'
+                  ? 'bg-[#D4A338] text-[#1F2718]'
+                  : 'text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              Due / Review ({dueOrHardCount})
+            </button>
           </div>
         </div>
+      ) : (
+        <div className="flex flex-col gap-4 border-b border-[#DCE5D3] pb-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="flex items-baseline gap-2.5">
+                <h1 className="font-display text-3xl font-bold tracking-tight text-[#1F2718]">
+                  Practice Arena
+                </h1>
+                <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]">
+                  أَلْعَابُ التَّعَلُّمِ
+                </span>
+              </div>
+              <p className="text-xs text-[#5A6552] mt-1">
+                {scope === 'hard'
+                  ? 'Focused review of words you marked as Difficult / Hard while studying.'
+                  : 'Smart Spaced Repetition (SRS) prioritizes Hard cards first, paired with Quizzes and Speed Match.'}
+              </p>
+            </div>
 
-        {/* Smooth Game Mode Tabs */}
-        <div
-          role="tablist"
-          aria-label="Practice game modes"
-          className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[#ECE8EF] bg-white/80 p-1 self-start"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={gameMode === 'classic'}
-            onClick={() => setGameMode('classic')}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              gameMode === 'classic'
-                ? 'bg-[#F7F4F9] text-[#241734] shadow-xs'
-                : 'text-zinc-600 hover:text-[#241734]'
-            }`}
-          >
-            <Layers className="h-3.5 w-3.5 text-[#4C1D95]" aria-hidden="true" />
-            <span>Spaced Repetition Cards</span>
-          </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {onOpenNotes && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenNotes({
+                      type: 'vocab',
+                      label:
+                        gameMode === 'classic' && currentCard
+                          ? `كلمة: ${stripTashkeel(currentCard.wordWithTashkeel)}`
+                          : 'التدريب · Practice Arena',
+                      refId: gameMode === 'classic' && currentCard ? currentCard.id : undefined,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#FBF3DC]/70 shadow-2xs transition-colors cursor-pointer"
+                >
+                  <NotebookPen className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+                  <span className="font-arabic-cairo">ملاحظاتي</span>
+                  <span>· Notes</span>
+                  {notesCount > 0 && (
+                    <span className="font-mono text-[11px] tabular-nums text-[#9A6F14]">
+                      ({notesCount})
+                    </span>
+                  )}
+                </button>
+              )}
 
-          <button
-            type="button"
-            role="tab"
-            aria-selected={gameMode === 'quiz'}
-            onClick={() => setGameMode('quiz')}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              gameMode === 'quiz'
-                ? 'bg-[#F7F4F9] text-[#E11D48] shadow-xs'
-                : 'text-zinc-600 hover:text-[#241734]'
-            }`}
-          >
-            <HelpCircle className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
-            <span>Quiz Mode</span>
-          </button>
+              {(gameMode === 'classic' || gameMode === 'quiz') && (
+                <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[#DCE5D3] bg-white p-1 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => resetSession('all')}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                      scope === 'all'
+                        ? 'bg-[#2D3B22] text-white'
+                        : 'text-[#5A6552] hover:text-[#1F2718]'
+                    }`}
+                  >
+                    All Cards ({cards.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => resetSession('hard')}
+                    className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                      scope === 'hard'
+                        ? 'bg-[#C2410C] text-white'
+                        : 'text-[#5A6552] hover:text-[#1F2718]'
+                    }`}
+                  >
+                    <Flame
+                      className={`h-3 w-3 ${scope === 'hard' ? 'text-white' : 'text-[#C2410C]'}`}
+                      aria-hidden="true"
+                    />
+                    <span>Difficult / Hard ({hardCount})</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={dueOrHardCount === 0}
+                    onClick={() => resetSession('needs_review')}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-45 whitespace-nowrap cursor-pointer ${
+                      scope === 'needs_review'
+                        ? 'bg-[#D4A338] text-[#1F2718]'
+                        : 'text-[#5A6552] hover:text-[#1F2718]'
+                    }`}
+                  >
+                    Due / Review ({dueOrHardCount})
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
 
-          <button
-            type="button"
-            role="tab"
-            aria-selected={gameMode === 'match'}
-            onClick={() => setGameMode('match')}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              gameMode === 'match'
-                ? 'bg-[#F7F4F9] text-fuchsia-800 shadow-xs'
-                : 'text-zinc-600 hover:text-[#241734]'
-            }`}
+          {/* Smooth Game Mode Tabs */}
+          <div
+            role="tablist"
+            aria-label="Practice game modes"
+            className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9]/80 p-1 self-start"
           >
-            <Zap className="h-3.5 w-3.5 text-fuchsia-700" aria-hidden="true" />
-            <span>Speed Match</span>
-          </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={gameMode === 'classic'}
+              onClick={() => setGameMode('classic')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                gameMode === 'classic'
+                  ? 'bg-white text-[#2D3B22] shadow-xs'
+                  : 'text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5 text-[#2D3B22]" aria-hidden="true" />
+              <span>Spaced Repetition Cards</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={gameMode === 'quiz'}
+              onClick={() => setGameMode('quiz')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                gameMode === 'quiz'
+                  ? 'bg-white text-[#9A6F14] shadow-xs'
+                  : 'text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              <HelpCircle className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+              <span>Quiz Mode</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={gameMode === 'match'}
+              onClick={() => setGameMode('match')}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                gameMode === 'match'
+                  ? 'bg-white text-[#2D3B22] shadow-xs'
+                  : 'text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              <Zap className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+              <span>Speed Match</span>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {gameMode === 'quiz' && (
         <QuizMode
@@ -367,6 +489,7 @@ export function PracticeMode({
           onUpdateStatus={onUpdateStatus}
           onRateSrs={onRateSrs}
           onRecordReview={onRecordReview}
+          onSwitchToAll={() => resetSession('all')}
         />
       )}
 
@@ -380,42 +503,82 @@ export function PracticeMode({
 
       {gameMode === 'classic' && (
         <>
-          {isComplete ? (
-            <div className="rounded-2xl border border-[#ECE8EF] bg-white/95 backdrop-blur-md p-8 sm:p-10 text-center space-y-6 shadow-sm">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 text-[#E11D48]">
+          {scope === 'hard' && deck.length === 0 && !isComplete ? (
+            <div className="rounded-2xl border border-[#DCE5D3] bg-white px-6 py-12 sm:py-14 text-center max-w-2xl mx-auto shadow-sm space-y-5">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FBF3DC] text-[#9A6F14] border border-[#E8B948]/40">
+                <Flame className="h-6 w-6 text-[#D4A338]" aria-hidden="true" />
+              </div>
+              <div className="space-y-2">
+                <p
+                  dir="rtl"
+                  lang="ar"
+                  className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]"
+                >
+                  لا تُوجَدُ كَلِمَاتٌ صَعْبَةٌ حَالِيًّا
+                </p>
+                <h2 className="font-display text-2xl font-bold text-[#1F2718]">
+                  No Words Marked as Difficult Yet
+                </h2>
+                <p className="text-sm text-[#5A6552] max-w-md mx-auto leading-relaxed">
+                  While studying in <span className="font-semibold text-[#1F2718]">My Vocabulary</span>, flip any flashcard and tap{' '}
+                  <span className="font-semibold text-[#C2410C]">Mark Hard</span> — or choose{' '}
+                  <span className="font-semibold text-[#C2410C]">صعبة / Hard</span> during SRS practice — to collect tricky words here for focused review.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => resetSession('all')}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] px-5 py-2.5 text-sm font-semibold text-white hover:brightness-110 shadow-xs transition-all cursor-pointer"
+                >
+                  <Layers className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
+                  <span>Practice All Saved Words ({cards.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onGoToVocabulary}
+                  className="rounded-xl border border-[#DCE5D3] bg-white px-5 py-2.5 text-sm font-semibold text-[#1F2718] hover:bg-[#EEF2E9] transition-colors cursor-pointer"
+                >
+                  Open My Vocabulary
+                </button>
+              </div>
+            </div>
+          ) : isComplete ? (
+            <div className="rounded-2xl border border-[#DCE5D3] bg-white/95 backdrop-blur-md p-8 sm:p-10 text-center space-y-6 shadow-sm">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EEF2E9] text-[#2D3B22]">
                 <CheckCircle2 className="h-6 w-6" aria-hidden="true" />
               </div>
               <div className="space-y-1.5">
-                <h2 className="font-display text-2xl font-bold text-[#241734]">
+                <h2 className="font-display text-2xl font-bold text-[#1F2718]">
                   SRS Session Complete
                 </h2>
-                <p className="text-sm text-zinc-600">
+                <p className="text-sm text-[#5A6552]">
                   You completed{' '}
-                  <span className="font-mono font-semibold text-[#241734]">
+                  <span className="font-mono font-semibold text-[#1F2718]">
                     {sessionResults.hard + sessionResults.good + sessionResults.easy}
                   </span>{' '}
                   recall evaluations. Cards rated Hard are queued first next time.
                 </p>
               </div>
 
-              <div className="mx-auto grid max-w-md grid-cols-3 gap-4 border-y border-[#ECE8EF] py-5">
+              <div className="mx-auto grid max-w-md grid-cols-3 gap-4 border-y border-[#DCE5D3] py-5">
                 <div>
-                  <p className="font-mono text-2xl font-bold tabular-nums text-[#E11D48]">
+                  <p className="font-mono text-2xl font-bold tabular-nums text-[#C2410C]">
                     {sessionResults.hard}
                   </p>
-                  <p className="text-xs text-zinc-500 mt-0.5">Hard · Review Soon</p>
+                  <p className="text-xs text-[#5A6552] mt-0.5">Hard · Review Soon</p>
                 </div>
                 <div>
-                  <p className="font-mono text-2xl font-bold tabular-nums text-fuchsia-700">
+                  <p className="font-mono text-2xl font-bold tabular-nums text-[#9A6F14]">
                     {sessionResults.good}
                   </p>
-                  <p className="text-xs text-zinc-500 mt-0.5">Good · 2 Days</p>
+                  <p className="text-xs text-[#5A6552] mt-0.5">Good · 2 Days</p>
                 </div>
                 <div>
-                  <p className="font-mono text-2xl font-bold tabular-nums text-[#4C1D95]">
+                  <p className="font-mono text-2xl font-bold tabular-nums text-[#2D3B22]">
                     {sessionResults.easy}
                   </p>
-                  <p className="text-xs text-zinc-500 mt-0.5">Easy · 1 Week</p>
+                  <p className="text-xs text-[#5A6552] mt-0.5">Easy · 1 Week</p>
                 </div>
               </div>
 
@@ -423,15 +586,15 @@ export function PracticeMode({
                 <button
                   type="button"
                   onClick={() => resetSession()}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#E11D48] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#2D3B22] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#3E522D] transition-colors cursor-pointer"
                 >
-                  <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                  <RotateCcw className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
                   <span>Start Next Round</span>
                 </button>
                 <button
                   type="button"
                   onClick={onGoToVocabulary}
-                  className="rounded-xl border border-[#ECE8EF] bg-white px-5 py-2.5 text-sm font-semibold text-[#241734] hover:bg-[#F7F4F9] transition-colors cursor-pointer"
+                  className="rounded-xl border border-[#DCE5D3] bg-white px-5 py-2.5 text-sm font-semibold text-[#1F2718] hover:bg-[#EEF2E9] transition-colors cursor-pointer"
                 >
                   Back to My Vocabulary
                 </button>
@@ -441,18 +604,22 @@ export function PracticeMode({
             <div className="space-y-5">
               {/* Progress Bar */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-zinc-500 font-mono tabular-nums">
+                <div className="flex items-center justify-between text-xs text-[#5A6552] font-mono tabular-nums">
                   <span>
                     Card {currentIndex + 1} of {deck.length}
-                    {currentCard.srsRating === 'hard' && ' · Priority Review'}
+                    {scope === 'hard'
+                      ? ' · Difficult / Hard Focus'
+                      : currentCard.srsRating === 'hard'
+                        ? ' · Priority Review'
+                        : ''}
                   </span>
                   <span>
                     {Math.round(((currentIndex + 1) / deck.length) * 100)}%
                   </span>
                 </div>
-                <div className="h-2 w-full overflow-hidden rounded-full bg-[#F2EEF6]">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-[#EEF2E9]">
                   <div
-                    className="h-full bg-gradient-to-r from-[#F43F5E] to-[#4C1D95] transition-all duration-300"
+                    className="h-full bg-gradient-to-r from-[#D4A338] to-[#2D3B22] transition-all duration-300"
                     style={{ width: `${((currentIndex + 1) / deck.length) * 100}%` }}
                   />
                 </div>
@@ -465,6 +632,7 @@ export function PracticeMode({
                 large
                 controlledFlipped={isFlipped}
                 onFlipChange={setIsFlipped}
+                onToggleDifficult={onToggleDifficult}
               />
 
               {/* Spaced Repetition Grading Controls */}
@@ -479,7 +647,7 @@ export function PracticeMode({
                           setIsFlipped(false);
                           setCurrentIndex((prev) => Math.max(0, prev - 1));
                         }}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-[#ECE8EF] bg-white px-3.5 py-2.5 text-xs font-semibold text-[#241734] hover:bg-[#F7F4F9] disabled:opacity-40 transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-xs font-semibold text-[#1F2718] hover:bg-[#EEF2E9] disabled:opacity-40 transition-colors cursor-pointer"
                       >
                         <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Previous</span>
@@ -487,62 +655,86 @@ export function PracticeMode({
                       <button
                         type="button"
                         onClick={() => {
-                          if (isPlayingWord) {
+                          unlockArabicAudioContext();
+                          if (wordAudioState !== 'idle') {
                             stopArabicSpeech();
-                            setIsPlayingWord(false);
+                            setWordAudioState('idle');
                           } else {
                             speakArabic(currentCard.wordWithTashkeel, {
                               rate: speechRate,
-                              onStart: () => setIsPlayingWord(true),
-                              onEnd: () => setIsPlayingWord(false),
+                              mode: 'word',
+                              vocalizedText:
+                                currentCard.vocalizedWord ||
+                                getLexiconSpeechText(
+                                  currentCard.word,
+                                  currentCard.wordWithTashkeel,
+                                  currentCard.wordType,
+                                  currentCard.partOfSpeech
+                                ),
+                              meaningHint: currentCard.englishMeaning,
+                              wordType: currentCard.wordType,
+                              partOfSpeech: currentCard.partOfSpeech,
+                              onLoading: () => setWordAudioState('loading'),
+                              onStart: () => setWordAudioState('playing'),
+                              onEnd: () => setWordAudioState('idle'),
+                              onError: () => setWordAudioState('idle'),
                             });
                           }
                         }}
                         className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2.5 text-xs font-semibold transition-all cursor-pointer ${
-                          isPlayingWord
-                            ? 'border-[#E11D48] bg-[#E11D48] text-white ring-4 ring-rose-200'
-                            : 'border-[#ECE8EF] bg-white text-[#241734] hover:bg-[#F7F4F9]'
+                          wordAudioState !== 'idle'
+                            ? 'border-[#2D3B22] bg-[#2D3B22] text-[#E8B948] ring-4 ring-[#DCE5D3]'
+                            : 'border-[#DCE5D3] bg-white text-[#1F2718] hover:bg-[#FBF3DC]'
                         }`}
                       >
-                        <Volume2
-                          className={`h-3.5 w-3.5 ${
-                            isPlayingWord ? 'text-white animate-pulse' : 'text-[#E11D48]'
-                          }`}
-                          aria-hidden="true"
-                        />
-                        <span>{isPlayingWord ? 'Playing (L)' : 'Listen (L)'}</span>
+                        {wordAudioState === 'loading' ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 text-[#E8B948] animate-spin" aria-hidden="true" />
+                            <span>Loading...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Volume2
+                              className={`h-3.5 w-3.5 ${
+                                wordAudioState === 'playing' ? 'text-[#E8B948] animate-pulse' : 'text-[#9A6F14]'
+                              }`}
+                              aria-hidden="true"
+                            />
+                            <span>{wordAudioState === 'playing' ? 'Playing (L)' : 'Listen (L)'}</span>
+                          </>
+                        )}
                       </button>
                     </div>
 
                     <button
                       type="button"
                       onClick={() => setIsFlipped(true)}
-                      className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-[#4C1D95] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#581C87] shadow-xs transition-colors cursor-pointer"
+                      className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-[#2D3B22] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#3E522D] shadow-xs transition-colors cursor-pointer"
                     >
-                      <RotateCw className="h-4 w-4 text-rose-200" aria-hidden="true" />
+                      <RotateCw className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
                       <span>Flip Card to Rate Recall</span>
                     </button>
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-xs space-y-3">
+                  <div className="rounded-2xl border border-[#DCE5D3] bg-white p-4 shadow-xs space-y-3">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-zinc-700">
+                      <span className="font-semibold text-[#1F2718]">
                         How well did you recall this word?
                       </span>
-                      <span className="font-mono text-zinc-400">Keys: 1 · 2 · 3</span>
+                      <span className="font-mono text-[#6B7861]">Keys: 1 · 2 · 3</span>
                     </div>
 
                     <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
                       <button
                         type="button"
                         onClick={() => handleSrsRate('hard')}
-                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-rose-900 hover:bg-rose-100 transition-colors cursor-pointer"
+                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-orange-200 bg-[#FEF2E8] px-4 py-3 text-[#9A3412] hover:bg-orange-100/70 transition-colors cursor-pointer"
                       >
                         <span className="inline-flex items-center gap-1.5 text-sm font-bold">
-                          <Flame className="h-4 w-4 text-[#E11D48]" aria-hidden="true" />
+                          <Flame className="h-4 w-4 text-[#C2410C]" aria-hidden="true" />
                           <span>صعبة / Hard</span>
                         </span>
-                        <span className="text-[11px] font-medium text-[#E11D48]">
+                        <span className="text-[11px] font-medium text-[#C2410C]">
                           Review Soon
                         </span>
                       </button>
@@ -550,13 +742,13 @@ export function PracticeMode({
                       <button
                         type="button"
                         onClick={() => handleSrsRate('good')}
-                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-fuchsia-200 bg-fuchsia-50/90 px-4 py-3 text-fuchsia-950 hover:bg-fuchsia-100 transition-colors cursor-pointer"
+                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-[#E8D7A7] bg-[#FBF3DC] px-4 py-3 text-[#1F2718] hover:bg-[#F5E7BC] transition-colors cursor-pointer"
                       >
                         <span className="inline-flex items-center gap-1.5 text-sm font-bold">
-                          <Clock className="h-4 w-4 text-fuchsia-700" aria-hidden="true" />
+                          <Clock className="h-4 w-4 text-[#9A6F14]" aria-hidden="true" />
                           <span>جيدة / Good</span>
                         </span>
-                        <span className="text-[11px] font-medium text-fuchsia-800">
+                        <span className="text-[11px] font-medium text-[#9A6F14]">
                           Review in 2 days
                         </span>
                       </button>
@@ -564,13 +756,13 @@ export function PracticeMode({
                       <button
                         type="button"
                         onClick={() => handleSrsRate('easy')}
-                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-[#4C1D95] bg-[#4C1D95] px-4 py-3 text-white hover:bg-[#581C87] transition-colors cursor-pointer"
+                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-[#2D3B22] bg-[#2D3B22] px-4 py-3 text-white hover:bg-[#3E522D] transition-colors cursor-pointer"
                       >
                         <span className="inline-flex items-center gap-1.5 text-sm font-bold">
-                          <Sparkles className="h-4 w-4 text-rose-200" aria-hidden="true" />
+                          <Sparkles className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
                           <span>سهلة / Easy</span>
                         </span>
-                        <span className="text-[11px] font-medium text-purple-100">
+                        <span className="text-[11px] font-medium text-[#EEF2E9]">
                           Review in a week
                         </span>
                       </button>
@@ -579,7 +771,7 @@ export function PracticeMode({
                 )}
               </div>
 
-              <p className="text-center text-xs text-zinc-500">
+              <p className="text-center text-xs text-[#5A6552]">
                 Shortcuts: <span className="font-mono">Space</span> flip ·{' '}
                 <span className="font-mono">L</span> pronounce
                 {isFlipped && (

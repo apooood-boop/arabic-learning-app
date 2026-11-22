@@ -20,6 +20,7 @@ export interface DailyStudyLog {
 interface WeeklyVocabChartProps {
   vocabCards: VocabCard[];
   dailyLogs: Record<string, DailyStudyLog>;
+  embedded?: boolean;
 }
 
 interface ChartPoint {
@@ -54,28 +55,28 @@ function CustomTooltip({ active, payload, chartMode }: CustomTooltipProps) {
   const point = payload[0].payload;
 
   return (
-    <div className="rounded-xl border border-[#ECE8EF]/90 bg-white/95 backdrop-blur-md px-3 py-2 shadow-md text-[11px]">
-      <p className="font-semibold text-[#241734] mb-1">{point.fullDate}</p>
+    <div className="rounded-xl border border-[#DCE5D3] bg-white/95 backdrop-blur-md px-3 py-2 shadow-md text-[11px]">
+      <p className="font-semibold text-[#1F2718] mb-1">{point.fullDate}</p>
       {chartMode === 'daily' ? (
         <div className="space-y-0.5 font-mono tabular-nums">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-zinc-500 font-sans">Actions</span>
-            <span className="font-bold text-[#E11D48]">{point.activity}</span>
+            <span className="text-[#5A6552] font-sans">Actions</span>
+            <span className="font-bold text-[#9A6F14]">{point.activity}</span>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-zinc-500 font-sans">Saved / Reviewed</span>
-            <span className="text-zinc-800">{point.added + point.reviewed}</span>
+            <span className="text-[#5A6552] font-sans">Saved / Reviewed</span>
+            <span className="text-[#1F2718]">{point.added + point.reviewed}</span>
           </div>
         </div>
       ) : (
         <div className="space-y-0.5 font-mono tabular-nums">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-zinc-500 font-sans">Total cards</span>
-            <span className="font-bold text-[#4C1D95]">{point.cumulativeLearned}</span>
+            <span className="text-[#5A6552] font-sans">Total cards</span>
+            <span className="font-bold text-[#2D3B22]">{point.cumulativeLearned}</span>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-zinc-500 font-sans">Added</span>
-            <span className="text-zinc-800">+{point.added}</span>
+            <span className="text-[#5A6552] font-sans">Added</span>
+            <span className="text-[#1F2718]">+{point.added}</span>
           </div>
         </div>
       )}
@@ -83,7 +84,11 @@ function CustomTooltip({ active, payload, chartMode }: CustomTooltipProps) {
   );
 }
 
-export function WeeklyVocabChart({ vocabCards, dailyLogs }: WeeklyVocabChartProps) {
+export function WeeklyVocabChart({
+  vocabCards,
+  dailyLogs,
+  embedded = false,
+}: WeeklyVocabChartProps) {
   const [chartMode, setChartMode] = useState<'daily' | 'cumulative'>('daily');
 
   const chartData = useMemo<ChartPoint[]>(() => {
@@ -143,10 +148,13 @@ export function WeeklyVocabChart({ vocabCards, dailyLogs }: WeeklyVocabChartProp
     const recentLearned = vocabCards.filter(
       (c) =>
         c.status === 'learned' &&
-        ((c.lastReviewedAt ?? c.createdAt) >= sevenDaysAgo)
+        (c.lastReviewedAt ?? c.createdAt) >= sevenDaysAgo
     ).length;
     const totalLearned = vocabCards.filter((c) => c.status === 'learned').length;
-    return Math.max(recentLearned, totalLearned > 0 && recentLearned === 0 ? totalLearned : recentLearned);
+    return Math.max(
+      recentLearned,
+      totalLearned > 0 && recentLearned === 0 ? totalLearned : recentLearned
+    );
   }, [vocabCards]);
 
   const weeklyTotalActions = useMemo(
@@ -157,30 +165,36 @@ export function WeeklyVocabChart({ vocabCards, dailyLogs }: WeeklyVocabChartProp
   const wordsProgressPct = Math.min(100, Math.round((weeklyWordsLearned / WEEKLY_WORDS_GOAL) * 100));
   const actionsProgressPct = Math.min(100, Math.round((weeklyTotalActions / WEEKLY_ACTIONS_GOAL) * 100));
 
+  const wrapperClass = embedded
+    ? 'w-full'
+    : 'mx-auto w-full max-w-lg rounded-2xl border border-[#DCE5D3] bg-white p-5 shadow-sm';
+
   return (
-    <section
-      aria-label="Weekly vocabulary learning progress"
-      className="mx-auto w-full max-w-lg rounded-2xl border border-[#ECE8EF] bg-white p-5 shadow-sm"
-    >
+    <div aria-label="Weekly vocabulary learning progress" className={wrapperClass}>
       {/* Compact Header */}
-      <div className="flex items-center justify-between gap-3 pb-3.5 border-b border-[#ECE8EF]">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-[#E11D48] border border-rose-200/70">
-            <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
+      <div className="flex items-center justify-between gap-3 pb-3.5 border-b border-[#EEF2E9]">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#FBF3DC] text-[#9A6F14] border border-[#E8B948]/40">
+            <TrendingUp className="h-4 w-4" aria-hidden="true" />
           </div>
-          <h2 className="font-display text-sm font-bold text-[#241734] truncate">
-            Weekly Vocabulary Progress
-          </h2>
+          <div className="min-w-0">
+            <h3 className="font-display text-sm font-bold text-[#1F2718] truncate">
+              Weekly Vocabulary Progress
+            </h3>
+            <p dir="rtl" lang="ar" className="font-arabic-cairo text-[11px] font-semibold text-[#5A6552]">
+              التقدّم الأسبوعي في المفردات
+            </p>
+          </div>
         </div>
 
-        <div className="inline-flex items-center gap-0.5 rounded-lg border border-[#ECE8EF] bg-[#F7F4F9] p-0.5 shrink-0">
+        <div className="inline-flex items-center gap-0.5 rounded-lg border border-[#DCE5D3] bg-[#EEF2E9] p-0.5 shrink-0">
           <button
             type="button"
             onClick={() => setChartMode('daily')}
-            className={`rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
               chartMode === 'daily'
-                ? 'bg-[#4C1D95] text-white shadow-xs'
-                : 'text-zinc-600 hover:text-[#241734]'
+                ? 'bg-[#2D3B22] text-white shadow-xs'
+                : 'text-[#5A6552] hover:text-[#1F2718]'
             }`}
           >
             Activity
@@ -188,10 +202,10 @@ export function WeeklyVocabChart({ vocabCards, dailyLogs }: WeeklyVocabChartProp
           <button
             type="button"
             onClick={() => setChartMode('cumulative')}
-            className={`rounded-md px-2 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+            className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
               chartMode === 'cumulative'
-                ? 'bg-[#4C1D95] text-white shadow-xs'
-                : 'text-zinc-600 hover:text-[#241734]'
+                ? 'bg-[#2D3B22] text-white shadow-xs'
+                : 'text-[#5A6552] hover:text-[#1F2718]'
             }`}
           >
             Growth
@@ -200,20 +214,20 @@ export function WeeklyVocabChart({ vocabCards, dailyLogs }: WeeklyVocabChartProp
       </div>
 
       {/* Concise Weekly Goal Progress Bars */}
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
-            <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700">
-              <CheckCircle2 className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
+            <span className="inline-flex items-center gap-1.5 font-medium text-[#2D3B22]">
+              <CheckCircle2 className="h-3.5 w-3.5 text-[#3E522D]" aria-hidden="true" />
               <span>Words learned this week</span>
             </span>
-            <span className="font-mono font-semibold tabular-nums text-[#E11D48]">
+            <span className="font-mono font-semibold tabular-nums text-[#2D3B22]">
               {weeklyWordsLearned}/{WEEKLY_WORDS_GOAL}
             </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-[#F2EEF6]">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-[#EEF2E9]">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-[#F43F5E] to-[#E11D48] transition-all duration-300"
+              className="h-full rounded-full bg-gradient-to-r from-[#3E522D] to-[#24301B] transition-all duration-500 ease-out"
               style={{ width: `${wordsProgressPct}%` }}
             />
           </div>
@@ -221,17 +235,17 @@ export function WeeklyVocabChart({ vocabCards, dailyLogs }: WeeklyVocabChartProp
 
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
-            <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700">
-              <Flame className="h-3.5 w-3.5 text-[#4C1D95]" aria-hidden="true" />
+            <span className="inline-flex items-center gap-1.5 font-medium text-[#2D3B22]">
+              <Flame className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
               <span>Study actions this week</span>
             </span>
-            <span className="font-mono font-semibold tabular-nums text-[#4C1D95]">
+            <span className="font-mono font-semibold tabular-nums text-[#9A6F14]">
               {weeklyTotalActions}/{WEEKLY_ACTIONS_GOAL}
             </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-[#F2EEF6]">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-[#EEF2E9]">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-fuchsia-600 to-[#4C1D95] transition-all duration-300"
+              className="h-full rounded-full bg-gradient-to-r from-[#D4A338] to-[#E8B948] transition-all duration-500 ease-out"
               style={{ width: `${actionsProgressPct}%` }}
             />
           </div>
@@ -239,52 +253,52 @@ export function WeeklyVocabChart({ vocabCards, dailyLogs }: WeeklyVocabChartProp
       </div>
 
       {/* Compact Non-Intrusive Sparkline Chart */}
-      <div className="mt-4 pt-3 border-t border-[#ECE8EF]">
-        <div className="h-[104px] w-full">
+      <div className="mt-4 pt-3 border-t border-[#EEF2E9]">
+        <div className="h-[116px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
               data={chartData}
               margin={{ top: 6, right: 8, left: -24, bottom: 0 }}
             >
               <defs>
-                <linearGradient id="plumPeachLine" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stopColor="#F43F5E" />
-                  <stop offset="55%" stopColor="#E11D48" />
-                  <stop offset="100%" stopColor="#4C1D95" />
+                <linearGradient id="oliveGoldLine" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#D4A338" />
+                  <stop offset="55%" stopColor="#3E522D" />
+                  <stop offset="100%" stopColor="#24301B" />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#ECE8EF" />
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#EEF2E9" />
               <XAxis
                 dataKey="dayLabel"
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: '#6B5F7A', fontSize: 10 }}
+                tick={{ fill: '#5A6552', fontSize: 10 }}
                 dy={4}
               />
               <YAxis
                 allowDecimals={false}
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: '#6B5F7A', fontSize: 10 }}
+                tick={{ fill: '#5A6552', fontSize: 10 }}
                 domain={[0, (dataMax: number) => Math.max(4, dataMax + 1)]}
               />
               <Tooltip
                 content={<CustomTooltip chartMode={chartMode} />}
-                cursor={{ stroke: '#D8D0DF', strokeWidth: 1, strokeDasharray: '3 3' }}
+                cursor={{ stroke: '#DCE5D3', strokeWidth: 1, strokeDasharray: '3 3' }}
               />
               <Line
                 type="monotone"
                 dataKey={chartMode === 'daily' ? 'activity' : 'cumulativeLearned'}
-                stroke="url(#plumPeachLine)"
+                stroke="url(#oliveGoldLine)"
                 strokeWidth={2.5}
-                dot={{ r: 3, fill: '#FFFFFF', stroke: '#E11D48', strokeWidth: 1.75 }}
-                activeDot={{ r: 5, fill: '#4C1D95', stroke: '#FFFFFF', strokeWidth: 1.5 }}
+                dot={{ r: 3, fill: '#FFFFFF', stroke: '#D4A338', strokeWidth: 1.75 }}
+                activeDot={{ r: 5, fill: '#2D3B22', stroke: '#FFFFFF', strokeWidth: 1.5 }}
                 animationDuration={350}
               />
             </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
-    </section>
+    </div>
   );
 }

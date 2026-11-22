@@ -6,6 +6,7 @@ import {
   Clock,
   Flame,
   HelpCircle,
+  Loader2,
   RotateCcw,
   Shuffle,
   Trophy,
@@ -13,9 +14,9 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
-import { enrichWordMeta, getLexiconSamplePool } from '../data/fallbackLexicon';
-import { PracticeStatus, SrsRating, VocabCard } from '../types/arabic';
-import { applySmartPartialTashkeel, speakArabic, stopArabicSpeech } from '../utils/arabic';
+import { enrichWordMeta, getLexiconSamplePool, getLexiconSpeechText } from '../data/fallbackLexicon';
+import { PracticeStatus, SrsRating, VocabCard, WordAnalysis } from '../types/arabic';
+import { applySmartPartialTashkeel, speakArabic, stopArabicSpeech, unlockArabicAudioContext } from '../utils/arabic';
 
 export type GameModeType = 'classic' | 'quiz' | 'match';
 
@@ -96,10 +97,11 @@ function buildRandomQuizQuestions(
 export interface QuizModeProps {
   cards: VocabCard[];
   speechRate: number;
-  scope?: 'all' | 'needs_review';
+  scope?: 'all' | 'hard' | 'needs_review';
   onUpdateStatus: (id: string, status: PracticeStatus) => void;
   onRateSrs?: (id: string, rating: SrsRating) => void;
   onRecordReview?: () => void;
+  onSwitchToAll?: () => void;
 }
 
 export function QuizMode({
@@ -109,6 +111,7 @@ export function QuizMode({
   onUpdateStatus,
   onRateSrs,
   onRecordReview,
+  onSwitchToAll,
 }: QuizModeProps) {
   const distractorPool = useMemo(() => getLexiconSamplePool(), []);
   const cardsRef = useRef(cards);
@@ -119,6 +122,9 @@ export function QuizMode({
       if (onlyIds && onlyIds.length > 0) {
         const subset = sourceCards.filter((c) => onlyIds.includes(c.id));
         if (subset.length > 0) return subset;
+      }
+      if (scope === 'hard') {
+        return sourceCards.filter((c) => c.srsRating === 'hard');
       }
       if (scope === 'needs_review') {
         const now = Date.now();
@@ -147,12 +153,12 @@ export function QuizMode({
   const [bestStreak, setBestStreak] = useState(0);
   const [wrongCardIds, setWrongCardIds] = useState<string[]>([]);
   const [isComplete, setIsComplete] = useState(false);
-  const [isPlayingWord, setIsPlayingWord] = useState(false);
+  const [wordAudioState, setWordAudioState] = useState<'idle' | 'loading' | 'playing'>('idle');
 
   const startRound = useCallback(
     (onlyCardIds?: string[]) => {
       stopArabicSpeech();
-      setIsPlayingWord(false);
+      setWordAudioState('idle');
       const latestCards = cardsRef.current;
       const target = getScopedCards(latestCards, onlyCardIds);
       setQuestions(buildRandomQuizQuestions(target, latestCards, distractorPool));
@@ -230,7 +236,7 @@ export function QuizMode({
 
   const handleNext = useCallback(() => {
     stopArabicSpeech();
-    setIsPlayingWord(false);
+    setWordAudioState('idle');
     if (currentIndex + 1 >= questions.length) {
       setIsComplete(true);
     } else {
@@ -241,18 +247,29 @@ export function QuizMode({
   }, [currentIndex, questions.length]);
 
   const handleToggleSpeech = useCallback(() => {
+    unlockArabicAudioContext();
     if (!currentQuestion) return;
-    if (isPlayingWord) {
+    if (wordAudioState !== 'idle') {
       stopArabicSpeech();
-      setIsPlayingWord(false);
+      setWordAudioState('idle');
     } else {
-      speakArabic(currentQuestion.card.wordWithTashkeel, {
+      const c = currentQuestion.card;
+      speakArabic(c.wordWithTashkeel, {
         rate: speechRate,
-        onStart: () => setIsPlayingWord(true),
-        onEnd: () => setIsPlayingWord(false),
+        mode: 'word',
+        vocalizedText:
+          c.vocalizedWord ||
+          getLexiconSpeechText(c.word, c.wordWithTashkeel, c.wordType, c.partOfSpeech),
+        meaningHint: c.englishMeaning,
+        wordType: c.wordType,
+        partOfSpeech: c.partOfSpeech,
+        onLoading: () => setWordAudioState('loading'),
+        onStart: () => setWordAudioState('playing'),
+        onEnd: () => setWordAudioState('idle'),
+        onError: () => setWordAudioState('idle'),
       });
     }
-  }, [currentQuestion, isPlayingWord, speechRate]);
+  }, [currentQuestion, wordAudioState, speechRate]);
 
   // Keyboard shortcuts: 1-4 or A-D select answer, Enter/ArrowRight advance, L pronounces
   useEffect(() => {
@@ -302,44 +319,44 @@ export function QuizMode({
 
   if (isComplete) {
     return (
-      <div className="mx-auto max-w-2xl rounded-2xl border border-[#ECE8EF] bg-white/95 p-8 text-center shadow-sm space-y-6 animate-game-pop">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-[#E11D48]">
-          <Trophy className="h-6 w-6" aria-hidden="true" />
+      <div className="mx-auto max-w-2xl rounded-2xl border border-[#DCE5D3] bg-white/95 p-8 text-center shadow-sm space-y-6 animate-game-pop">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FBF3DC] text-[#9A6F14]">
+          <Trophy className="h-6 w-6 text-[#D4A338]" aria-hidden="true" />
         </div>
 
         <div className="space-y-1.5">
-          <p dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]">
+          <p dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]">
             أَحْسَنْتَ! اِنْتَهَتِ الجَوْلَةُ
           </p>
-          <h2 className="font-display text-2xl font-bold text-[#241734]">
+          <h2 className="font-display text-2xl font-bold text-[#1F2718]">
             Quiz Mode Complete
           </h2>
-          <p className="text-sm text-zinc-600">
-            You recalled <span className="font-mono font-semibold text-[#241734]">{score}</span> of{' '}
-            <span className="font-mono font-semibold text-[#241734]">{questions.length}</span>{' '}
+          <p className="text-sm text-[#5A6552]">
+            You recalled <span className="font-mono font-semibold text-[#1F2718]">{score}</span> of{' '}
+            <span className="font-mono font-semibold text-[#1F2718]">{questions.length}</span>{' '}
             Arabic flashcards accurately.
           </p>
         </div>
 
-        <div className="mx-auto grid max-w-md grid-cols-3 gap-4 border-y border-[#ECE8EF] py-5 font-mono tabular-nums">
+        <div className="mx-auto grid max-w-md grid-cols-3 gap-4 border-y border-[#DCE5D3] py-5 font-mono tabular-nums">
           <div>
-            <p className="text-2xl font-bold text-[#E11D48]">
+            <p className="text-2xl font-bold text-[#9A6F14]">
               {score}/{questions.length}
             </p>
-            <p className="font-sans text-xs text-zinc-500 mt-0.5">Score</p>
+            <p className="font-sans text-xs text-[#5A6552] mt-0.5">Score</p>
           </div>
           <div>
-            <p className="text-2xl font-bold text-[#4C1D95]">{accuracy}%</p>
-            <p className="font-sans text-xs text-zinc-500 mt-0.5">Retention</p>
+            <p className="text-2xl font-bold text-[#2D3B22]">{accuracy}%</p>
+            <p className="font-sans text-xs text-[#5A6552] mt-0.5">Retention</p>
           </div>
           <div>
-            <p className="text-2xl font-bold text-fuchsia-700">{bestStreak}</p>
-            <p className="font-sans text-xs text-zinc-500 mt-0.5">Best Streak</p>
+            <p className="text-2xl font-bold text-[#3E522D]">{bestStreak}</p>
+            <p className="font-sans text-xs text-[#5A6552] mt-0.5">Best Streak</p>
           </div>
         </div>
 
         {wrongCardIds.length > 0 && (
-          <p className="text-xs text-rose-950 bg-rose-50/80 border border-rose-200/80 rounded-xl px-4 py-2.5">
+          <p className="text-xs text-amber-950 bg-[#FEF2E8] border border-orange-200 rounded-xl px-4 py-2.5">
             {wrongCardIds.length}{' '}
             {wrongCardIds.length === 1 ? 'word was' : 'words were'} scheduled as{' '}
             <span className="font-semibold">Hard · Needs Review</span> for priority practice.
@@ -351,16 +368,16 @@ export function QuizMode({
             <button
               type="button"
               onClick={() => startRound(wrongCardIds)}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#4C1D95] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#581C87] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#2D3B22] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#3E522D] transition-colors cursor-pointer"
             >
-              <RotateCcw className="h-4 w-4 text-rose-200" aria-hidden="true" />
+              <RotateCcw className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
               <span>Practice Missed Words ({wrongCardIds.length})</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => startRound()}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#E11D48] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-2 rounded-xl bg-[#D4A338] px-5 py-2.5 text-sm font-bold text-[#1F2718] hover:bg-[#E8B948] transition-colors cursor-pointer"
           >
             <Shuffle className="h-4 w-4" aria-hidden="true" />
             <span>New Random Quiz</span>
@@ -370,7 +387,38 @@ export function QuizMode({
     );
   }
 
-  if (!currentQuestion) return null;
+  if (!currentQuestion) {
+    if (scope === 'hard') {
+      return (
+        <div className="mx-auto max-w-2xl rounded-2xl border border-[#DCE5D3] bg-white p-8 sm:p-10 text-center shadow-sm space-y-5">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FBF3DC] text-[#9A6F14] border border-[#E8B948]/40">
+            <Flame className="h-6 w-6 text-[#D4A338]" aria-hidden="true" />
+          </div>
+          <div className="space-y-2">
+            <p dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]">
+              لا تُوجَدُ كَلِمَاتٌ صَعْبَةٌ حَالِيًّا
+            </p>
+            <h2 className="font-display text-xl font-bold text-[#1F2718]">
+              No Words Marked as Difficult Yet
+            </h2>
+            <p className="text-sm text-[#5A6552] max-w-md mx-auto leading-relaxed">
+              Mark tricky words with <span className="font-semibold text-[#1F2718]">Mark Hard</span> in My Vocabulary or select <span className="font-semibold text-[#1F2718]">صعبة / Hard</span> during practice to quiz yourself on them here.
+            </p>
+          </div>
+          {onSwitchToAll && (
+            <button
+              type="button"
+              onClick={onSwitchToAll}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#2D3B22] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#3E522D] transition-colors cursor-pointer"
+            >
+              <span>Practice All Saved Words ({cards.length})</span>
+            </button>
+          )}
+        </div>
+      );
+    }
+    return null;
+  }
 
   const selectedOption = currentQuestion.options.find((o) => o.id === selectedOptionId) ?? null;
   const isAnswered = selectedOption !== null;
@@ -385,22 +433,22 @@ export function QuizMode({
   return (
     <div className="mx-auto max-w-2xl space-y-5">
       {/* Retention Progress & Score Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#ECE8EF]/90 bg-white px-5 py-3.5 shadow-2xs">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#DCE5D3] bg-white px-5 py-3.5 shadow-2xs">
         <div className="flex flex-wrap items-center gap-3.5 text-xs font-mono tabular-nums">
-          <span className="font-semibold text-zinc-700">
+          <span className="font-semibold text-[#1F2718]">
             Card {currentIndex + 1}/{questions.length}
           </span>
-          <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
-          <span className="text-[#E11D48] font-bold">
+          <span className="text-[#DCE5D3]" aria-hidden="true">|</span>
+          <span className="text-[#9A6F14] font-bold">
             Score: {score}/{answeredCount}
           </span>
-          <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
-          <span className="text-[#4C1D95] font-semibold">
+          <span className="text-[#DCE5D3]" aria-hidden="true">|</span>
+          <span className="text-[#2D3B22] font-semibold">
             Retention: {accuracy}%
           </span>
-          <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
-          <span className="inline-flex items-center gap-1 text-fuchsia-700 font-semibold">
-            <Flame className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="text-[#DCE5D3]" aria-hidden="true">|</span>
+          <span className="inline-flex items-center gap-1 text-[#9A6F14] font-semibold">
+            <Flame className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
             <span>{streak}</span>
           </span>
         </div>
@@ -408,7 +456,7 @@ export function QuizMode({
         <button
           type="button"
           onClick={() => startRound()}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-[#241734] cursor-pointer"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#5A6552] hover:text-[#1F2718] cursor-pointer"
         >
           <Shuffle className="h-3.5 w-3.5" aria-hidden="true" />
           <span>New Random Round</span>
@@ -416,25 +464,25 @@ export function QuizMode({
       </div>
 
       {/* Random Flashcard Question Card */}
-      <div className="rounded-2xl border border-[#ECE8EF]/90 bg-white p-6 sm:p-8 shadow-sm space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
-          <span className="inline-flex items-center gap-1.5 font-medium text-[#E11D48]">
-            <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+      <div className="rounded-2xl border border-[#DCE5D3] bg-white p-6 sm:p-8 shadow-sm space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#5A6552]">
+          <span className="inline-flex items-center gap-1.5 font-medium text-[#9A6F14]">
+            <HelpCircle className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
             <span>Select the correct English meaning from 4 choices</span>
           </span>
 
-          <div className="flex items-center gap-2 font-medium text-zinc-600" dir="rtl" lang="ar">
+          <div className="flex items-center gap-2 font-arabic-cairo font-medium text-[#3F4A37]" dir="rtl" lang="ar">
             {wordType && <span>نوع الكلمة: {wordType}</span>}
             {wordType && root && <span aria-hidden="true">·</span>}
             {root && <span>الجذر: {root}</span>}
           </div>
         </div>
 
-        <div className="flex flex-col items-center justify-center rounded-2xl bg-[#F7F4F9] border border-[#ECE8EF]/70 px-6 py-7 text-center space-y-3">
+        <div className="flex flex-col items-center justify-center rounded-2xl bg-[#EEF2E9]/70 border border-[#DCE5D3] px-6 py-7 text-center space-y-3">
           <p
             dir="rtl"
             lang="ar"
-            className="font-arabic-scheherazade text-5xl sm:text-6xl font-bold text-[#241734] leading-[1.8]"
+            className="font-arabic-scheherazade text-5xl sm:text-6xl font-bold text-[#1F2718] leading-[1.8]"
           >
             {applySmartPartialTashkeel(currentQuestion.card.wordWithTashkeel)}
           </p>
@@ -444,49 +492,58 @@ export function QuizMode({
               type="button"
               onClick={handleToggleSpeech}
               className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-semibold transition-all cursor-pointer ${
-                isPlayingWord
-                  ? 'border-[#E11D48] bg-[#E11D48] text-white ring-4 ring-rose-200'
-                  : 'border-[#ECE8EF] bg-white text-zinc-700 hover:bg-rose-50 hover:text-[#E11D48] hover:border-rose-300'
+                wordAudioState !== 'idle'
+                  ? 'border-[#2D3B22] bg-[#2D3B22] text-[#E8B948] ring-4 ring-[#DCE5D3]'
+                  : 'border-[#DCE5D3] bg-white text-[#1F2718] hover:bg-[#FBF3DC] hover:text-[#9A6F14] hover:border-[#D4A338]'
               }`}
             >
-              <Volume2
-                className={`h-3.5 w-3.5 ${
-                  isPlayingWord ? 'text-white animate-pulse' : 'text-[#E11D48]'
-                }`}
-                aria-hidden="true"
-              />
-              <span>{isPlayingWord ? 'Playing (L)' : 'Listen (L)'}</span>
+              {wordAudioState === 'loading' ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 text-[#E8B948] animate-spin" aria-hidden="true" />
+                  <span>Loading...</span>
+                </>
+              ) : (
+                <>
+                  <Volume2
+                    className={`h-3.5 w-3.5 ${
+                      wordAudioState === 'playing' ? 'text-[#E8B948] animate-pulse' : 'text-[#9A6F14]'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span>{wordAudioState === 'playing' ? 'Playing (L)' : 'Listen (L)'}</span>
+                </>
+              )}
             </button>
 
             {firstExample && !isAnswered && (
               <button
                 type="button"
                 onClick={() => setShowContextHint((prev) => !prev)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[#ECE8EF] bg-white px-3.5 py-2 text-xs font-semibold text-[#4C1D95] hover:bg-purple-50 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] transition-colors cursor-pointer"
               >
-                <BookOpen className="h-3.5 w-3.5 text-[#4C1D95]" aria-hidden="true" />
+                <BookOpen className="h-3.5 w-3.5 text-[#2D3B22]" aria-hidden="true" />
                 <span>{showContextHint ? 'Hide Context Clue' : 'Show Context Clue'}</span>
               </button>
             )}
 
             {isAnswered && (
-              <span className="font-mono text-xs text-zinc-500">
+              <span className="font-mono text-xs text-[#5A6552]">
                 {currentQuestion.card.transliteration}
               </span>
             )}
           </div>
 
           {firstExample && (showContextHint || isAnswered) && (
-            <div className="mt-2 w-full max-w-lg border-t border-[#ECE8EF] pt-3 space-y-1">
+            <div className="mt-2 w-full max-w-lg border-t border-[#DCE5D3] pt-3 space-y-1">
               <p
                 dir="rtl"
                 lang="ar"
-                className="font-arabic-scheherazade text-xl leading-[2.0] text-[#241734]"
+                className="font-arabic-scheherazade text-xl leading-[2.0] text-[#1F2718]"
               >
                 {applySmartPartialTashkeel(firstExample.arabic)}
               </p>
               {isAnswered && (
-                <p className="text-xs text-zinc-600">{firstExample.english}</p>
+                <p className="text-xs text-[#5A6552]">{firstExample.english}</p>
               )}
             </div>
           )}
@@ -499,20 +556,20 @@ export function QuizMode({
             const letter = ['A', 'B', 'C', 'D'][idx] ?? '';
 
             let buttonStyle =
-              'border-[#ECE8EF] bg-white text-[#241734] hover:border-rose-300 hover:bg-rose-50/40';
+              'border-[#DCE5D3] bg-white text-[#1F2718] hover:border-[#D4A338] hover:bg-[#FAFBF8]';
             let statusIcon: 'correct' | 'wrong' | null = null;
 
             if (isAnswered) {
               if (opt.isCorrect) {
                 buttonStyle =
-                  'border-[#4C1D95] bg-purple-50 text-[#4C1D95] ring-2 ring-[#4C1D95]/20 animate-game-pop';
+                  'border-[#2D3B22] bg-[#EEF2E9] text-[#2D3B22] ring-2 ring-[#2D3B22]/20 animate-game-pop';
                 statusIcon = 'correct';
               } else if (isPicked && !opt.isCorrect) {
                 buttonStyle =
-                  'border-[#E11D48] bg-rose-50 text-rose-950 ring-2 ring-[#E11D48]/20 animate-game-shake';
+                  'border-[#C2410C] bg-[#FEF2E8] text-[#9A3412] ring-2 ring-[#C2410C]/20 animate-game-shake';
                 statusIcon = 'wrong';
               } else {
-                buttonStyle = 'border-[#ECE8EF]/70 bg-[#F7F4F9] text-zinc-400';
+                buttonStyle = 'border-[#DCE5D3]/70 bg-[#FAFBF8] text-[#6B7861]';
               }
             }
 
@@ -527,7 +584,7 @@ export function QuizMode({
                 } ${buttonStyle}`}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#F2EEF6] font-mono text-xs font-bold text-[#4C1D95]">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#EEF2E9] font-mono text-xs font-bold text-[#2D3B22]">
                     {letter}
                   </span>
                   <span className="text-sm font-semibold leading-snug">
@@ -536,10 +593,10 @@ export function QuizMode({
                 </div>
 
                 {statusIcon === 'correct' && (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-[#4C1D95]" aria-hidden="true" />
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-[#2D3B22]" aria-hidden="true" />
                 )}
                 {statusIcon === 'wrong' && (
-                  <XCircle className="h-4 w-4 shrink-0 text-[#E11D48]" aria-hidden="true" />
+                  <XCircle className="h-4 w-4 shrink-0 text-[#C2410C]" aria-hidden="true" />
                 )}
               </button>
             );
@@ -551,19 +608,19 @@ export function QuizMode({
           <div
             className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border px-4 py-3 animate-game-pop ${
               selectedOption.isCorrect
-                ? 'border-purple-200 bg-purple-50/90 text-[#4C1D95]'
-                : 'border-rose-200 bg-rose-50/80 text-rose-950'
+                ? 'border-[#DCE5D3] bg-[#EEF2E9] text-[#2D3B22]'
+                : 'border-orange-200 bg-[#FEF2E8] text-[#9A3412]'
             }`}
           >
             <div className="flex items-center gap-2 text-xs font-semibold">
               {selectedOption.isCorrect ? (
                 <>
-                  <CheckCircle2 className="h-4 w-4 text-[#4C1D95] shrink-0" aria-hidden="true" />
+                  <CheckCircle2 className="h-4 w-4 text-[#2D3B22] shrink-0" aria-hidden="true" />
                   <span>Correct! · إِجَابَةٌ صَحِيحَةٌ</span>
                 </>
               ) : (
                 <>
-                  <XCircle className="h-4 w-4 text-[#E11D48] shrink-0" aria-hidden="true" />
+                  <XCircle className="h-4 w-4 text-[#C2410C] shrink-0" aria-hidden="true" />
                   <span>
                     Incorrect — Meaning: &ldquo;{currentQuestion.card.englishMeaning}&rdquo;
                   </span>
@@ -574,14 +631,14 @@ export function QuizMode({
             <button
               type="button"
               onClick={handleNext}
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#4C1D95] px-4 py-2 text-xs font-semibold text-white hover:bg-[#581C87] transition-colors cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#2D3B22] px-4 py-2 text-xs font-semibold text-white hover:bg-[#3E522D] transition-colors cursor-pointer whitespace-nowrap"
             >
               <span>{currentIndex + 1 >= questions.length ? 'See Retention Results' : 'Next Random Card'}</span>
-              <ArrowRight className="h-3.5 w-3.5 text-rose-200" aria-hidden="true" />
+              <ArrowRight className="h-3.5 w-3.5 text-[#E8B948]" aria-hidden="true" />
             </button>
           </div>
         ) : (
-          <p className="text-center text-xs text-zinc-500">
+          <p className="text-center text-xs text-[#5A6552]">
             Shortcuts: <span className="font-mono">1–4</span> or{' '}
             <span className="font-mono">A–D</span> choose ·{' '}
             <span className="font-mono">L</span> pronounce
@@ -596,7 +653,11 @@ export const QuizChallengeGame = QuizMode;
 
 interface MatchPairItem {
   pairId: string;
+  word: string;
   wordWithTashkeel: string;
+  vocalizedWord?: string;
+  wordType?: WordAnalysis['wordType'];
+  partOfSpeech?: string;
   englishMeaning: string;
   isUserCard: boolean;
 }
@@ -630,7 +691,11 @@ export function SpeedMatchGame({
       .slice(0, 6)
       .map((card) => ({
         pairId: card.id,
+        word: card.word,
         wordWithTashkeel: card.wordWithTashkeel,
+        vocalizedWord: card.vocalizedWord,
+        wordType: card.wordType,
+        partOfSpeech: card.partOfSpeech,
         englishMeaning: card.englishMeaning,
         isUserCard: true,
       }));
@@ -643,7 +708,11 @@ export function SpeedMatchGame({
           usedMeanings.add(key);
           picked.push({
             pairId: `lex-${item.normalizedKey}`,
+            word: item.wordWithTashkeel,
             wordWithTashkeel: item.wordWithTashkeel,
+            vocalizedWord: item.vocalizedWord,
+            wordType: item.wordType,
+            partOfSpeech: item.partOfSpeech,
             englishMeaning: item.englishMeaning,
             isUserCard: false,
           });
@@ -707,8 +776,23 @@ export function SpeedMatchGame({
 
   const handlePickArabic = (pair: MatchPairItem) => {
     if (matchedIds.includes(pair.pairId) || mismatchPair || isFinished) return;
+    unlockArabicAudioContext();
     if (!startedAt) setStartedAt(Date.now());
-    speakArabic(pair.wordWithTashkeel, { rate: speechRate });
+    speakArabic(pair.wordWithTashkeel, {
+      rate: speechRate,
+      mode: 'word',
+      vocalizedText:
+        pair.vocalizedWord ||
+        getLexiconSpeechText(
+          pair.word,
+          pair.wordWithTashkeel,
+          pair.wordType,
+          pair.partOfSpeech
+        ),
+      meaningHint: pair.englishMeaning,
+      wordType: pair.wordType,
+      partOfSpeech: pair.partOfSpeech,
+    });
 
     if (selectedEnId) {
       setSelectedArId(pair.pairId);
@@ -738,22 +822,22 @@ export function SpeedMatchGame({
   return (
     <div className="mx-auto max-w-3xl space-y-5">
       {/* Top Status & Soft Timer */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#ECE8EF]/90 bg-white px-5 py-3.5 shadow-2xs">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#DCE5D3] bg-white px-5 py-3.5 shadow-2xs">
         <div className="flex flex-wrap items-center gap-4 text-xs font-mono tabular-nums">
-          <span className="inline-flex items-center gap-1.5 font-semibold text-[#4C1D95]">
-            <Clock className="h-3.5 w-3.5 text-[#E11D48]" aria-hidden="true" />
+          <span className="inline-flex items-center gap-1.5 font-semibold text-[#2D3B22]">
+            <Clock className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
             <span>{formattedSeconds}s</span>
           </span>
-          <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
-          <span className="font-semibold text-[#E11D48]">
+          <span className="text-[#DCE5D3]" aria-hidden="true">|</span>
+          <span className="font-semibold text-[#9A6F14]">
             Matched: {matchedIds.length}/{pairs.length}
           </span>
-          <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
-          <span className="text-zinc-600">Mistakes: {mistakes}</span>
+          <span className="text-[#DCE5D3]" aria-hidden="true">|</span>
+          <span className="text-[#5A6552]">Mistakes: {mistakes}</span>
           {formattedBest && (
             <>
-              <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
-              <span className="text-fuchsia-700 font-semibold">Best: {formattedBest}s</span>
+              <span className="text-[#DCE5D3]" aria-hidden="true">|</span>
+              <span className="text-[#2D3B22] font-semibold">Best: {formattedBest}s</span>
             </>
           )}
         </div>
@@ -761,7 +845,7 @@ export function SpeedMatchGame({
         <button
           type="button"
           onClick={startNewRound}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-600 hover:text-[#241734] cursor-pointer"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#5A6552] hover:text-[#1F2718] cursor-pointer"
         >
           <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
           <span>New Set</span>
@@ -769,43 +853,43 @@ export function SpeedMatchGame({
       </div>
 
       {isFinished ? (
-        <div className="rounded-2xl border border-[#ECE8EF] bg-white p-8 text-center shadow-sm space-y-5 animate-game-pop">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-[#E11D48]">
-            <Zap className="h-6 w-6" aria-hidden="true" />
+        <div className="rounded-2xl border border-[#DCE5D3] bg-white p-8 text-center shadow-sm space-y-5 animate-game-pop">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FBF3DC] text-[#9A6F14]">
+            <Zap className="h-6 w-6 text-[#D4A338]" aria-hidden="true" />
           </div>
           <div className="space-y-1">
-            <p dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]">
+            <p dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]">
               سُرْعَةٌ رَائِعَةٌ!
             </p>
-            <h2 className="font-display text-2xl font-bold text-[#241734]">
+            <h2 className="font-display text-2xl font-bold text-[#1F2718]">
               All Pairs Matched
             </h2>
-            <p className="text-sm text-zinc-600">
+            <p className="text-sm text-[#5A6552]">
               Completed {pairs.length} Arabic-English matches in{' '}
-              <span className="font-mono font-bold text-[#E11D48]">{formattedSeconds}s</span> with{' '}
-              <span className="font-mono font-bold text-[#241734]">{mistakes}</span>{' '}
+              <span className="font-mono font-bold text-[#9A6F14]">{formattedSeconds}s</span> with{' '}
+              <span className="font-mono font-bold text-[#1F2718]">{mistakes}</span>{' '}
               {mistakes === 1 ? 'mistake' : 'mistakes'}.
             </p>
           </div>
           <button
             type="button"
             onClick={startNewRound}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#E11D48] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-2 rounded-xl bg-[#2D3B22] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#3E522D] transition-colors cursor-pointer"
           >
-            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            <RotateCcw className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
             <span>Play Faster Round</span>
           </button>
         </div>
       ) : (
-        <div className="rounded-2xl border border-[#ECE8EF]/90 bg-white p-5 sm:p-6 shadow-sm space-y-4">
-          <p className="text-xs text-zinc-500">
+        <div className="rounded-2xl border border-[#DCE5D3] bg-white p-5 sm:p-6 shadow-sm space-y-4">
+          <p className="text-xs text-[#5A6552]">
             Tap an Arabic word and its matching English translation. Timer starts on your first tap.
           </p>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {/* Arabic Column */}
             <div className="space-y-2.5">
-              <p className="text-xs font-semibold text-zinc-500 px-1">Arabic Words</p>
+              <p className="text-xs font-semibold text-[#5A6552] px-1">Arabic Words</p>
               {shuffledArabic.map((item) => {
                 const isMatched = matchedIds.includes(item.pairId);
                 const isSelected = selectedArId === item.pairId;
@@ -821,21 +905,21 @@ export function SpeedMatchGame({
                     lang="ar"
                     className={`flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-all duration-150 ${
                       isMatched
-                        ? 'border-purple-200 bg-purple-50/70 text-[#4C1D95] opacity-65 cursor-default'
+                        ? 'border-[#DCE5D3] bg-[#EEF2E9] text-[#2D3B22] opacity-70 cursor-default'
                         : isWrong
-                          ? 'border-[#E11D48] bg-rose-50 text-rose-950 animate-game-shake cursor-pointer'
+                          ? 'border-[#C2410C] bg-[#FEF2E8] text-[#9A3412] animate-game-shake cursor-pointer'
                           : isSelected
-                            ? 'border-[#E11D48] bg-rose-50 text-rose-950 ring-2 ring-[#E11D48]/20 cursor-pointer'
-                            : 'border-[#ECE8EF] bg-[#F7F4F9] text-[#241734] hover:border-rose-300 hover:bg-white cursor-pointer'
+                            ? 'border-[#D4A338] bg-[#FBF3DC] text-[#1F2718] ring-2 ring-[#D4A338]/30 cursor-pointer'
+                            : 'border-[#DCE5D3] bg-[#FAFBF8] text-[#1F2718] hover:border-[#D4A338] hover:bg-white cursor-pointer'
                     }`}
                   >
                     <span className="font-arabic-scheherazade text-2xl font-bold leading-normal">
                       {applySmartPartialTashkeel(item.wordWithTashkeel)}
                     </span>
                     {isMatched ? (
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-[#4C1D95]" aria-hidden="true" />
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-[#2D3B22]" aria-hidden="true" />
                     ) : (
-                      <Volume2 className="h-3.5 w-3.5 shrink-0 text-zinc-400" aria-hidden="true" />
+                      <Volume2 className="h-3.5 w-3.5 shrink-0 text-[#6B7861]" aria-hidden="true" />
                     )}
                   </button>
                 );
@@ -844,7 +928,7 @@ export function SpeedMatchGame({
 
             {/* English Column */}
             <div className="space-y-2.5">
-              <p className="text-xs font-semibold text-zinc-500 px-1">English Meanings</p>
+              <p className="text-xs font-semibold text-[#5A6552] px-1">English Meanings</p>
               {shuffledEnglish.map((item) => {
                 const isMatched = matchedIds.includes(item.pairId);
                 const isSelected = selectedEnId === item.pairId;
@@ -858,19 +942,19 @@ export function SpeedMatchGame({
                     onClick={() => handlePickEnglish(item)}
                     className={`flex w-full items-center justify-between gap-3 rounded-xl border px-4 py-3.5 text-left transition-all duration-150 ${
                       isMatched
-                        ? 'border-purple-200 bg-purple-50/70 text-[#4C1D95] opacity-65 cursor-default'
+                        ? 'border-[#DCE5D3] bg-[#EEF2E9] text-[#2D3B22] opacity-70 cursor-default'
                         : isWrong
-                          ? 'border-[#E11D48] bg-rose-50 text-rose-950 animate-game-shake cursor-pointer'
+                          ? 'border-[#C2410C] bg-[#FEF2E8] text-[#9A3412] animate-game-shake cursor-pointer'
                           : isSelected
-                            ? 'border-[#E11D48] bg-rose-50 text-rose-950 ring-2 ring-[#E11D48]/20 cursor-pointer'
-                            : 'border-[#ECE8EF] bg-white text-[#241734] hover:border-rose-300 hover:bg-rose-50/30 cursor-pointer'
+                            ? 'border-[#D4A338] bg-[#FBF3DC] text-[#1F2718] ring-2 ring-[#D4A338]/30 cursor-pointer'
+                            : 'border-[#DCE5D3] bg-white text-[#1F2718] hover:border-[#D4A338] hover:bg-[#FAFBF8] cursor-pointer'
                     }`}
                   >
                     <span className="text-sm font-semibold leading-snug">
                       {item.englishMeaning}
                     </span>
                     {isMatched && (
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-[#4C1D95]" aria-hidden="true" />
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-[#2D3B22]" aria-hidden="true" />
                     )}
                   </button>
                 );

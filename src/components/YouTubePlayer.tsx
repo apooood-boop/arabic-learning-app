@@ -310,8 +310,8 @@ export function YouTubePlayer({
   };
 
   return (
-    <div className="border-b border-[#ECE8EF] bg-[#1F1035] px-6 py-6 sm:px-10 space-y-3">
-      <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-white/10 bg-black aspect-video shadow-lg">
+    <div className="border-b border-[#DCE5D3] bg-[#1D2715] px-4 py-5 sm:px-10 sm:py-6 space-y-3">
+      <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-white/12 bg-black aspect-video shadow-lg">
         {apiFallback ? (
           <iframe
             src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?rel=0`}
@@ -328,19 +328,19 @@ export function YouTubePlayer({
       {/* Synced Playback Status & Scrubbing Bar */}
       <div
         dir="ltr"
-        className="mx-auto max-w-3xl rounded-xl border border-white/12 bg-white/8 px-4 py-2.5 text-xs text-purple-100 space-y-2 backdrop-blur-xs"
+        className="mx-auto max-w-3xl rounded-xl border border-white/15 bg-[#2A3820]/90 px-4 py-2.5 text-xs text-[#EEF2E9] space-y-2 backdrop-blur-xs"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span
               className={`h-2 w-2 rounded-full shrink-0 ${
                 playerState === 'playing'
-                  ? 'bg-[#F43F5E] ring-3 ring-rose-400/35 animate-pulse'
+                  ? 'bg-[#E8B948] ring-3 ring-[#E8B948]/35 animate-pulse'
                   : playerState === 'buffering'
                     ? 'bg-amber-400 animate-pulse'
                     : apiReady
                       ? 'bg-emerald-400'
-                      : 'bg-purple-300/60'
+                      : 'bg-[#DCE5D3]/60'
               }`}
               aria-hidden="true"
             />
@@ -367,7 +367,7 @@ export function YouTubePlayer({
                   onClick={() => handleSeekTo(currentTime - 10)}
                   title="Rewind 10s"
                   aria-label="Rewind 10 seconds"
-                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-mono text-purple-100 hover:bg-white/20 transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-mono text-[#EEF2E9] hover:bg-white/20 transition-colors cursor-pointer"
                 >
                   <RotateCcw className="h-3 w-3" aria-hidden="true" />
                   <span>-10s</span>
@@ -376,7 +376,7 @@ export function YouTubePlayer({
                   type="button"
                   onClick={handleTogglePlay}
                   aria-label={playerState === 'playing' ? 'Pause video' : 'Play video'}
-                  className="inline-flex items-center gap-1 rounded-lg bg-[#E11D48] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-[#D4A338] px-2.5 py-1 text-[11px] font-bold text-[#1F2718] hover:bg-[#E8B948] transition-colors cursor-pointer"
                 >
                   {playerState === 'playing' ? (
                     <>
@@ -395,7 +395,7 @@ export function YouTubePlayer({
                   onClick={() => handleSeekTo(currentTime + 10)}
                   title="Forward 10s"
                   aria-label="Forward 10 seconds"
-                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-mono text-purple-100 hover:bg-white/20 transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-mono text-[#EEF2E9] hover:bg-white/20 transition-colors cursor-pointer"
                 >
                   <span>+10s</span>
                   <RotateCw className="h-3 w-3" aria-hidden="true" />
@@ -409,8 +409,8 @@ export function YouTubePlayer({
               aria-pressed={autoScroll}
               className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
                 autoScroll
-                  ? 'bg-purple-200/20 text-rose-200 border border-rose-300/40'
-                  : 'bg-white/5 text-purple-200/75 border border-white/10 hover:text-white'
+                  ? 'bg-[#E8B948]/20 text-[#FBF3DC] border border-[#E8B948]/45'
+                  : 'bg-white/5 text-[#DCE5D3]/80 border border-white/15 hover:text-white'
               }`}
             >
               <LocateFixed className="h-3 w-3" aria-hidden="true" />
@@ -422,7 +422,7 @@ export function YouTubePlayer({
         {/* Interactive Sync Scrubber */}
         {apiReady && duration > 0 ? (
           <div className="flex items-center gap-3">
-            <span className="font-mono text-[11px] tabular-nums text-rose-200 w-11">
+            <span className="font-mono text-[11px] tabular-nums text-[#E8B948] w-11">
               {formatTimestamp(currentTime)}
             </span>
             <input
@@ -433,15 +433,15 @@ export function YouTubePlayer({
               value={Math.min(currentTime, duration)}
               onChange={(e) => handleSeekTo(Number(e.target.value))}
               aria-label="Video timeline scrubber"
-              className="h-1.5 flex-1 accent-[#F43F5E] cursor-pointer"
+              className="h-1.5 flex-1 accent-[#E8B948] cursor-pointer"
             />
-            <span className="font-mono text-[11px] tabular-nums text-purple-200 w-11 text-right">
+            <span className="font-mono text-[11px] tabular-nums text-[#DCE5D3] w-11 text-right">
               {formatTimestamp(duration)}
             </span>
           </div>
         ) : (
-          <div className="flex items-center gap-1.5 text-[11px] text-purple-200/80">
-            <Video className="h-3.5 w-3.5 text-rose-300" aria-hidden="true" />
+          <div className="flex items-center gap-1.5 text-[11px] text-[#DCE5D3]/85">
+            <Video className="h-3.5 w-3.5 text-[#E8B948]" aria-hidden="true" />
             <span>
               Click any timestamp badge in the Arabic transcript below to jump directly to that moment.
             </span>

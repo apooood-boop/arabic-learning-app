@@ -3,28 +3,33 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowRight,
+  Award,
   BookOpen,
   CheckCircle2,
   Clock,
   Compass,
   Crown,
   Flame,
+  GraduationCap,
+  Layers,
   LogIn,
   NotebookPen,
   Plus,
   Sprout,
   Trash2,
   Video,
+  Volume2,
   X,
 } from 'lucide-react';
 import { AddLessonModal } from './components/AddLessonModal';
 import { AuthModal } from './components/AuthModal';
-import { DailyGoalCard } from './components/DailyGoalCard';
+import { ConversationView } from './components/ConversationView';
+import { ExamsView } from './components/ExamsView';
 import { LandingPage } from './components/LandingPage';
 import { LessonReader } from './components/LessonReader';
 import { Navbar } from './components/Navbar';
 import { NotesDrawer } from './components/NotesDrawer';
-import { PracticeMode } from './components/PracticeMode';
+import { PracticeScope } from './components/PracticeMode';
 import { ReadingHistoryView } from './components/ReadingHistoryView';
 import { VocabularyView } from './components/VocabularyView';
 import { DailyStudyLog, WeeklyVocabChart } from './components/WeeklyVocabChart';
@@ -97,6 +102,7 @@ const STARTER_VOCAB_CARDS: VocabCard[] = [
     ],
     lessonId: 'beg-morning-market',
     lessonTitle: 'A Morning in the Old Market',
+    level: 'beginner',
     status: 'needs_review',
     createdAt: 1700000000001,
     source: 'lexicon',
@@ -121,6 +127,7 @@ const STARTER_VOCAB_CARDS: VocabCard[] = [
     ],
     lessonId: 'int-house-of-wisdom',
     lessonTitle: 'The House of Wisdom in Baghdad',
+    level: 'intermediate',
     status: 'needs_review',
     createdAt: 1700000000002,
     source: 'lexicon',
@@ -145,6 +152,7 @@ const STARTER_VOCAB_CARDS: VocabCard[] = [
     ],
     lessonId: 'beg-family-garden',
     lessonTitle: 'Our Family Garden',
+    level: 'beginner',
     status: 'learned',
     createdAt: 1700000000003,
     source: 'lexicon',
@@ -210,7 +218,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('lessons');
   const [activeNavSection, setActiveNavSection] = useState<
-    'home' | 'history' | 'levels' | 'vocabulary' | 'practice'
+    'home' | 'history' | 'levels' | 'vocabulary' | 'exams' | 'conversation'
   >('home');
   const [selectedLevel, setSelectedLevel] = useLocalStorage<ProficiencyLevel>(
     `qalam_selected_level_v2::${sessionScope}`,
@@ -258,10 +266,15 @@ export default function App() {
   );
 
   const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
+  const [practiceScopeRequest, setPracticeScopeRequest] = useState<{
+    scope: PracticeScope;
+    seq: number;
+  }>({ scope: 'all', seq: 0 });
   const [isAddLessonOpen, setIsAddLessonOpen] = useState(false);
   const [isNotesOpen, setIsNotesOpen] = useState(false);
   const [notesContext, setNotesContext] = useState<NoteContextTag | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
+  const [audioToast, setAudioToast] = useState<string | null>(null);
   const [publishNotice, setPublishNotice] = useState<{
     lessonId: string;
     title: string;
@@ -281,16 +294,29 @@ export default function App() {
   // In-flight deduplication map for background prefetching
   const inFlightRequests = useRef<Map<string, Promise<WordAnalysis>>>(new Map());
   const levelsSectionRef = useRef<HTMLElement | null>(null);
+  const audioToastTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleTtsNotice = (event: Event) => {
       const custom = event as CustomEvent<{ message?: string }>;
       if (custom.detail?.message) {
-        setApiNotice(custom.detail.message);
+        setAudioToast(custom.detail.message);
+        if (audioToastTimerRef.current !== null) {
+          window.clearTimeout(audioToastTimerRef.current);
+        }
+        audioToastTimerRef.current = window.setTimeout(() => {
+          setAudioToast(null);
+          audioToastTimerRef.current = null;
+        }, 5500);
       }
     };
     window.addEventListener('qalam:tts-notice', handleTtsNotice);
-    return () => window.removeEventListener('qalam:tts-notice', handleTtsNotice);
+    return () => {
+      window.removeEventListener('qalam:tts-notice', handleTtsNotice);
+      if (audioToastTimerRef.current !== null) {
+        window.clearTimeout(audioToastTimerRef.current);
+      }
+    };
   }, []);
 
   // Role/Auth Access Control: only signed-in non-guest users can add/manage custom content
@@ -321,6 +347,10 @@ export default function App() {
 
   const learnedCount = useMemo(
     () => vocabCards.filter((c) => c.status === 'learned').length,
+    [vocabCards]
+  );
+  const difficultCount = useMemo(
+    () => vocabCards.filter((c) => c.srsRating === 'hard').length,
     [vocabCards]
   );
   const reviewCount = vocabCards.length - learnedCount;
@@ -380,9 +410,23 @@ export default function App() {
   };
 
   const handleSelectTab = (tab: ActiveTab) => {
+    if (tab === 'vocabulary') {
+      setPracticeScopeRequest((prev) => ({ scope: 'all', seq: prev.seq + 1 }));
+    }
+    if (tab === 'lessons') {
+      setActiveLessonId(null);
+    }
     setActiveTab(tab);
     setActiveNavSection(tab === 'lessons' ? 'home' : tab);
     setWordSelection(null);
+  };
+
+  const handleOpenDifficultPractice = () => {
+    setPracticeScopeRequest((prev) => ({ scope: 'hard', seq: prev.seq + 1 }));
+    setActiveTab('vocabulary');
+    setActiveNavSection('vocabulary');
+    setWordSelection(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSelectHome = () => {
@@ -508,11 +552,13 @@ export default function App() {
     }
   };
 
-  const getCacheKey = (word: string, contextSentence: string) =>
-    `v2::${normalizeArabicWord(word)}::${contextSentence.slice(0, 80)}`;
+  const getCacheKey = (word: string, contextSentence: string, level: ProficiencyLevel) =>
+    `v3::${level}::${normalizeArabicWord(word)}::${contextSentence.slice(0, 80)}`;
 
   const fetchWordAnalysis = async (selection: ActiveWordSelection): Promise<WordAnalysis> => {
-    const cacheKey = getCacheKey(selection.word, selection.contextSentence);
+    const targetLevel: ProficiencyLevel =
+      selection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
+    const cacheKey = getCacheKey(selection.word, selection.contextSentence, targetLevel);
 
     // 1. Instant 0ms localStorage cache hit
     const cached = analysisCache[cacheKey];
@@ -535,7 +581,7 @@ export default function App() {
         body: JSON.stringify({
           word: selection.word,
           contextSentence: selection.contextSentence,
-          level: activeLesson?.level ?? selectedLevel,
+          level: targetLevel,
         }),
       });
 
@@ -571,7 +617,9 @@ export default function App() {
     setAnalysisError(null);
     setJustSaved(false);
 
-    const cacheKey = getCacheKey(selection.word, selection.contextSentence);
+    const targetLevel: ProficiencyLevel =
+      selection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
+    const cacheKey = getCacheKey(selection.word, selection.contextSentence, targetLevel);
     const cached = analysisCache[cacheKey];
     if (cached) {
       setWordAnalysis(cached);
@@ -590,7 +638,13 @@ export default function App() {
     setPopoverMode('translation');
     setAnalysisError(null);
 
-    const cacheKey = getCacheKey(wordSelection.word, wordSelection.contextSentence);
+    const targetLevel: ProficiencyLevel =
+      wordSelection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
+    const cacheKey = getCacheKey(
+      wordSelection.word,
+      wordSelection.contextSentence,
+      targetLevel
+    );
     const cached = analysisCache[cacheKey];
     if (cached) {
       setWordAnalysis(cached);
@@ -615,6 +669,8 @@ export default function App() {
     if (!wordSelection) return;
     recordStudyActivity();
     const normalizedKey = normalizeArabicWord(wordSelection.word);
+    const sourceLevel: ProficiencyLevel =
+      wordSelection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
 
     if (vocabStatusMap.has(normalizedKey)) {
       setJustSaved(true);
@@ -640,6 +696,8 @@ export default function App() {
         normalizedKey,
         lessonId: activeLesson?.id,
         lessonTitle: activeLesson?.titleEn,
+        level: result.level ?? sourceLevel,
+        vocalizedWord: result.vocalizedWord,
         status: 'needs_review',
         createdAt: Date.now(),
       };
@@ -696,6 +754,30 @@ export default function App() {
     setVocabCards((prev) => prev.filter((card) => card.id !== id));
   };
 
+  const handleToggleDifficultCard = (id: string) => {
+    const now = Date.now();
+    setVocabCards((prev) =>
+      prev.map((card) => {
+        if (card.id !== id) return card;
+        if (card.srsRating === 'hard') {
+          return {
+            ...card,
+            srsRating: undefined,
+            lastReviewedAt: now,
+          };
+        }
+        return {
+          ...card,
+          status: 'needs_review',
+          srsRating: 'hard',
+          intervalDays: 0,
+          nextReviewAt: now,
+          lastReviewedAt: now,
+        };
+      })
+    );
+  };
+
   const getDefaultNoteContext = useCallback((): NoteContextTag | null => {
     if (activeTab === 'lessons' && activeLesson) {
       return {
@@ -704,10 +786,22 @@ export default function App() {
         refId: activeLesson.id,
       };
     }
-    if (activeTab === 'vocabulary' || activeTab === 'practice') {
+    if (activeTab === 'vocabulary') {
       return {
         type: 'vocab',
         label: 'مفرداتي · My Vocabulary',
+      };
+    }
+    if (activeTab === 'exams') {
+      return {
+        type: 'exam',
+        label: 'الامتحانات · Exams',
+      };
+    }
+    if (activeTab === 'conversation') {
+      return {
+        type: 'conversation',
+        label: 'المحادثة · Conversation',
       };
     }
     return null;
@@ -759,11 +853,23 @@ export default function App() {
     [setStudyNotes]
   );
 
+  const completedLessonsCount = useMemo(
+    () => readingHistory.filter((item) => item.progressPercent >= 100).length,
+    [readingHistory]
+  );
+
   const activeWordKey = wordSelection ? normalizeArabicWord(wordSelection.word) : null;
   const isCurrentWordSaved = activeWordKey ? vocabStatusMap.has(activeWordKey) : false;
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#FDFBFC] text-[#241734]">
+    <div
+      className="min-h-screen flex flex-col bg-[#FAFBF8] text-[#1F2718]"
+      onDragStart={(e) => {
+        if (e.target instanceof HTMLImageElement || e.target instanceof SVGElement) {
+          e.preventDefault();
+        }
+      }}
+    >
       <Navbar
         activeTab={activeTab}
         activeNavSection={activeNavSection}
@@ -782,32 +888,44 @@ export default function App() {
         onLogout={handleLogout}
         notesCount={studyNotes.length}
         onOpenNotes={() => handleOpenNotes()}
+        dailyWordGoal={dailyWordGoal}
+        onChangeDailyGoal={setDailyWordGoal}
+        vocabCards={vocabCards}
+        todayLog={dailyLogs[todayKey]}
+        todayKey={todayKey}
       />
 
       {!currentUser ? (
         <>
           <LandingPage onGetStarted={(mode) => handleOpenAuth(mode)} />
 
-          <footer className="border-t border-[#ECE8EF] bg-white/95 py-6">
-            <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-xs text-zinc-500 sm:px-6 lg:px-8">
-              <div className="flex items-center gap-2">
-                <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-lg font-bold text-[#4C1D95]">
-                  قَلَم
-                </span>
-                <span>Qalam — Contextual Arabic Reading &amp; Smart Flashcard Studio</span>
+          <footer className="border-t border-[#DCE5D3] bg-white/95 py-6">
+            <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-xs text-[#5A6552] sm:px-6 lg:px-8">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-lg font-bold text-[#2D3B22] select-none">
+                    قَلَم
+                  </span>
+                  <span className="font-medium text-[#1F2718]">
+                    Qalam — Contextual Arabic Reading &amp; Smart Flashcard Studio
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#6B7861]">
+                  &copy; {new Date().getFullYear()} Qalam (قَلَم). Original Arabic lessons, exercises, and study prompts. All rights reserved.
+                </p>
               </div>
               <div className="flex items-center gap-4">
                 <button
                   type="button"
                   onClick={() => handleOpenAuth('login')}
-                  className="font-semibold text-[#4C1D95] hover:underline cursor-pointer"
+                  className="font-semibold text-[#2D3B22] hover:underline cursor-pointer"
                 >
                   Sign In
                 </button>
                 <button
                   type="button"
                   onClick={() => handleOpenAuth('register')}
-                  className="font-semibold text-[#E11D48] hover:underline cursor-pointer"
+                  className="font-semibold text-[#9A6F14] hover:underline cursor-pointer"
                 >
                   Create Free Account
                 </button>
@@ -834,17 +952,17 @@ export default function App() {
         <>
           {/* Friendly Non-Blocking API Notice Banner */}
           {apiNotice && (
-            <div className="border-b border-rose-200 bg-rose-50/90">
-              <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-2.5 text-xs text-rose-950 sm:px-6 lg:px-8">
+            <div className="border-b border-[#E8B948]/40 bg-[#FEF9EC]">
+              <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-2.5 text-xs text-[#5C4107] sm:px-6 lg:px-8">
                 <div className="flex items-center gap-2 min-w-0">
-                  <AlertCircle className="h-4 w-4 shrink-0 text-[#E11D48]" aria-hidden="true" />
+                  <AlertCircle className="h-4 w-4 shrink-0 text-[#D4A338]" aria-hidden="true" />
                   <span dir="auto" className="leading-relaxed">{apiNotice}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setApiNotice(null)}
                   aria-label="Dismiss notification"
-                  className="rounded-md p-1 text-[#E11D48] hover:bg-rose-100 cursor-pointer"
+                  className="rounded-md p-1 text-[#9A6F14] hover:bg-[#FBF3DC] cursor-pointer"
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
@@ -872,26 +990,24 @@ export default function App() {
                 onOpenNotes={(ctx) => handleOpenNotes(ctx)}
               />
             ) : (
-              <div className="space-y-10">
-                {/* Compact, Light, Welcoming Hero Banner */}
-                <section className="relative overflow-hidden rounded-2xl border border-[#ECE8EF] bg-white shadow-sm">
-                  <div className="islamic-geo-pattern-light pointer-events-none absolute inset-0 opacity-80" />
-                  <div className="pointer-events-none absolute -top-24 -right-24 h-64 w-64 rounded-full bg-[#F43F5E]/10 blur-3xl" />
-                  <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-[#4C1D95]/10 blur-3xl" />
+              <div className="space-y-9">
+                {/* Refined Dark Olive Welcome Banner */}
+                <section className="animate-fade-slide-up relative overflow-hidden rounded-2xl border border-[#3E522D] bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#FAFBF8] shadow-md">
+                  <div className="islamic-geo-pattern pointer-events-none absolute inset-0 opacity-40" />
+                  <div className="pointer-events-none absolute -top-24 -right-24 h-64 w-64 rounded-full bg-[#D4A338]/15 blur-3xl" />
+                  <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-[#DCE5D3]/10 blur-3xl" />
 
                   <div className="relative mx-auto max-w-3xl px-6 py-10 sm:px-10 sm:py-12 text-center space-y-5">
                     <div className="space-y-3">
                       <h1
                         dir="rtl"
                         lang="ar"
-                        className="font-arabic-scheherazade text-4xl sm:text-5xl font-bold text-[#241734] leading-[1.55]"
+                        className="font-arabic-scheherazade text-4xl sm:text-5xl font-bold text-white leading-[1.55]"
                       >
                         اقرأ، استمع، تدرّب، وطوّر لغتك!
                       </h1>
 
-
-
-                      <p className="mx-auto max-w-xl text-xs sm:text-sm italic text-zinc-500 leading-relaxed pt-1">
+                      <p className="mx-auto max-w-xl text-xs sm:text-sm text-[#DCE5D3] leading-relaxed pt-1">
                         Improve your Arabic through level-based reading, audio listening, pronunciation practice, and instant word translations. Build your vocabulary and develop your language skills in context.
                       </p>
                     </div>
@@ -900,85 +1016,99 @@ export default function App() {
                       <button
                         type="button"
                         onClick={handleSelectLevelsNav}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#4C1D95] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-[#581C87] shadow-sm transition-colors cursor-pointer"
+                        className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#D4A338] to-[#E8B948] px-5 py-2.5 text-xs sm:text-sm font-bold text-[#1F2718] hover:brightness-105 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <span>Explore Levels</span>
-                        <ArrowDown className="h-3.5 w-3.5 text-rose-200" aria-hidden="true" />
+                        <ArrowDown className="h-3.5 w-3.5 text-[#1F2718]" aria-hidden="true" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleOpenDifficultPractice}
+                        className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-[#D4A338]/50 bg-[#1D2716]/85 px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#FAFBF8] hover:bg-[#1D2716] hover:border-[#E8B948]/80 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Flame className="h-4 w-4 shrink-0 text-[#E8B948]" aria-hidden="true" />
+                        <span>Practice Cards</span>
+                        {difficultCount > 0 && (
+                          <span className="font-mono text-xs font-bold tabular-nums text-[#E8B948]">
+                            ({difficultCount})
+                          </span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenNotes()}
+                        className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#FAFBF8] hover:bg-white/20 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <NotebookPen className="h-4 w-4 shrink-0 text-[#E8B948]" aria-hidden="true" />
+                        <span className="font-arabic-cairo">ملاحظاتي · My Notes</span>
+                        {studyNotes.length > 0 && (
+                          <span className="font-mono text-xs font-bold tabular-nums text-[#E8B948]">
+                            ({studyNotes.length})
+                          </span>
+                        )}
                       </button>
 
                       {canAddContent && (
                         <button
                           type="button"
                           onClick={() => setIsAddLessonOpen(true)}
-                          className="inline-flex items-center gap-2 rounded-xl bg-[#E11D48] px-5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-[#BE123C] shadow-sm transition-colors cursor-pointer"
+                          className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-white/20 bg-white/12 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-white/20 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
                         >
-                          <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
-                          <span>إضافة نص جديد (Add New Text)</span>
+                          <Plus className="h-4 w-4 shrink-0 text-[#E8B948]" aria-hidden="true" />
+                          <span className="font-arabic-cairo">إضافة نص جديد (Add New Text)</span>
                         </button>
                       )}
-
-                      <button
-                        type="button"
-                        onClick={() => handleOpenNotes()}
-                        className="inline-flex items-center gap-2 rounded-xl border border-purple-200 bg-white px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#4C1D95] hover:bg-purple-50 shadow-sm transition-colors cursor-pointer"
-                      >
-                        <NotebookPen className="h-4 w-4 shrink-0 text-[#E11D48]" aria-hidden="true" />
-                        <span>ملاحظاتي · My Notes</span>
-                        {studyNotes.length > 0 && (
-                          <span className="font-mono text-xs font-bold tabular-nums text-[#E11D48]">
-                            ({studyNotes.length})
-                          </span>
-                        )}
-                      </button>
                     </div>
 
-                    {/* Subtle Compact Stats Strip */}
-                    <div className="mx-auto flex flex-wrap items-center justify-center gap-6 border-t border-[#ECE8EF] pt-5 text-xs sm:text-sm">
+                    {/* Subtle Compact Hero Stats Strip */}
+                    <div className="mx-auto flex flex-wrap items-center justify-center gap-6 border-t border-white/15 pt-5 text-xs sm:text-sm">
                       <div className="flex items-baseline gap-2">
-                        <span className="font-mono text-xl font-bold tabular-nums text-[#E11D48]">
+                        <span className="font-mono text-xl font-bold tabular-nums text-[#E8B948]">
                           {learnedCount}
                         </span>
-                        <span className="text-zinc-500 font-medium">Words Learned</span>
+                        <span className="text-[#DCE5D3] font-medium">Words Learned</span>
                       </div>
-                      <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
+                      <span className="text-white/25" aria-hidden="true">|</span>
                       <div className="flex items-baseline gap-2">
-                        <span className="font-mono text-xl font-bold tabular-nums text-[#4C1D95]">
+                        <span className="font-mono text-xl font-bold tabular-nums text-white">
                           {allLessons.length}
                         </span>
-                        <span className="text-zinc-500 font-medium">Lessons Available</span>
+                        <span className="text-[#DCE5D3] font-medium">Lessons Available</span>
                       </div>
-                      <span className="text-[#ECE8EF]" aria-hidden="true">|</span>
+                      <span className="text-white/25" aria-hidden="true">|</span>
                       <div className="flex items-baseline gap-2">
-                        <span className="font-mono text-xl font-bold tabular-nums text-[#581C87]">
+                        <span className="font-mono text-xl font-bold tabular-nums text-[#E8B948]">
                           {effectiveStreakCount}
                         </span>
-                        <span className="text-zinc-500 font-medium">Day Streak</span>
+                        <span className="text-[#DCE5D3] font-medium">Day Streak</span>
                       </div>
                     </div>
                   </div>
                 </section>
 
-                {/* Harmonious Color-Coded Level Cards (Warm Sunset Progression) */}
+                {/* Cohesive Olive & Gold Proficiency Level Cards */}
                 <section
                   id="levels-section"
                   ref={levelsSectionRef}
                   aria-label="Select proficiency level"
-                  className="scroll-mt-20 space-y-4"
+                  className="scroll-mt-20 space-y-4 animate-fade-slide-up animate-delay-75"
                 >
-                  <div className="flex items-baseline justify-between gap-2">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <div className="flex items-baseline gap-2.5">
-                      <h2 className="font-display text-xl sm:text-2xl font-bold text-[#241734]">
+                      <h2 className="font-display text-xl sm:text-2xl font-bold text-[#1F2718]">
                         Choose Your Level
                       </h2>
                       <span
                         dir="rtl"
                         lang="ar"
-                        className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]"
+                        className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]"
                       >
                         المستويات
                       </span>
                     </div>
-                    <span className="text-xs text-zinc-500">
+                    <span className="text-xs text-[#5A6552]">
                       Select a track to filter reading passages
                     </span>
                   </div>
@@ -988,44 +1118,50 @@ export default function App() {
                       {
                         level: 'beginner' as ProficiencyLevel,
                         Icon: Sprout,
-                        cardBg: 'from-rose-50/75 via-white to-pink-50/45',
-                        glowOrb: 'bg-rose-300/25',
+                        cardBg: 'from-[#FAFBF8] via-white to-[#EEF2E9]/70',
+                        glowOrb: 'bg-[#DCE5D3]/50',
                         activeBorder:
-                          'border-rose-500 ring-2 ring-rose-500/20 shadow-md',
+                          'border-[#3B4D2B] ring-2 ring-[#D4A338]/40 shadow-md',
                         idleBorder:
-                          'border-[#ECE8EF] hover:border-rose-400/70 hover:shadow-sm',
+                          'border-[#DCE5D3] hover:border-[#3E522D]/60 hover:shadow-sm',
                         iconBox:
-                          'bg-gradient-to-br from-rose-500 to-pink-600 text-white ring-4 ring-rose-100',
-                        titleColor: 'text-[#241734]',
-                        accentText: 'text-rose-600',
+                          'bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]',
+                        activeIconBox:
+                          'bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#E8B948] ring-4 ring-[#DCE5D3]',
+                        titleColor: 'text-[#1F2718]',
+                        accentText: 'text-[#2D3B22]',
                       },
                       {
                         level: 'intermediate' as ProficiencyLevel,
                         Icon: Compass,
-                        cardBg: 'from-fuchsia-50/75 via-white to-purple-50/45',
-                        glowOrb: 'bg-fuchsia-300/25',
+                        cardBg: 'from-[#FAFBF8] via-white to-[#FBF3DC]/50',
+                        glowOrb: 'bg-[#FBF3DC]/60',
                         activeBorder:
-                          'border-fuchsia-700 ring-2 ring-fuchsia-700/20 shadow-md',
+                          'border-[#3B4D2B] ring-2 ring-[#D4A338]/40 shadow-md',
                         idleBorder:
-                          'border-[#ECE8EF] hover:border-fuchsia-600/60 hover:shadow-sm',
+                          'border-[#DCE5D3] hover:border-[#D4A338]/70 hover:shadow-sm',
                         iconBox:
-                          'bg-gradient-to-br from-fuchsia-700 to-purple-800 text-white ring-4 ring-fuchsia-100',
-                        titleColor: 'text-[#241734]',
-                        accentText: 'text-fuchsia-800',
+                          'bg-[#FBF3DC] text-[#9A6F14] border border-[#E8B948]/50',
+                        activeIconBox:
+                          'bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#E8B948] ring-4 ring-[#FBF3DC]',
+                        titleColor: 'text-[#1F2718]',
+                        accentText: 'text-[#9A6F14]',
                       },
                       {
                         level: 'advanced' as ProficiencyLevel,
                         Icon: Crown,
-                        cardBg: 'from-purple-50/75 via-white to-indigo-50/50',
-                        glowOrb: 'bg-purple-400/20',
+                        cardBg: 'from-[#FAFBF8] via-white to-[#EEF2E9]/85',
+                        glowOrb: 'bg-[#3E522D]/15',
                         activeBorder:
-                          'border-purple-900 ring-2 ring-purple-900/20 shadow-md',
+                          'border-[#2D3B22] ring-2 ring-[#D4A338]/45 shadow-md',
                         idleBorder:
-                          'border-[#ECE8EF] hover:border-purple-800/60 hover:shadow-sm',
+                          'border-[#DCE5D3] hover:border-[#2D3B22]/60 hover:shadow-sm',
                         iconBox:
-                          'bg-gradient-to-br from-purple-900 to-indigo-950 text-white ring-4 ring-purple-100',
-                        titleColor: 'text-[#241734]',
-                        accentText: 'text-purple-900',
+                          'bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]',
+                        activeIconBox:
+                          'bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#E8B948] ring-4 ring-[#DCE5D3]',
+                        titleColor: 'text-[#1F2718]',
+                        accentText: 'text-[#2D3B22]',
                       },
                     ]).map((cfg) => {
                       const meta = LEVEL_LABELS[cfg.level];
@@ -1039,7 +1175,7 @@ export default function App() {
                           type="button"
                           onClick={() => handleSelectLevel(cfg.level)}
                           aria-pressed={active}
-                          className={`group relative overflow-hidden flex flex-col justify-between rounded-2xl border bg-gradient-to-br ${cfg.cardBg} p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E11D48] ${
+                          className={`group relative overflow-hidden flex flex-col justify-between rounded-2xl border bg-gradient-to-br ${cfg.cardBg} p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-1 active:scale-[0.99] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4A338] ${
                             active ? cfg.activeBorder : cfg.idleBorder
                           }`}
                         >
@@ -1049,7 +1185,9 @@ export default function App() {
 
                           <div className="relative flex items-start justify-between gap-3 w-full">
                             <div
-                              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl shadow-sm transition-transform duration-200 group-hover:scale-105 ${cfg.iconBox}`}
+                              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl shadow-sm transition-transform duration-200 group-hover:scale-105 ${
+                                active ? cfg.activeIconBox : cfg.iconBox
+                              }`}
                             >
                               <IconComponent className="h-5 w-5" aria-hidden="true" />
                             </div>
@@ -1060,7 +1198,7 @@ export default function App() {
                               </span>
                               {active && (
                                 <CheckCircle2
-                                  className={`h-4 w-4 ${cfg.accentText}`}
+                                  className="h-4 w-4 text-[#D4A338]"
                                   aria-label="Selected"
                                 />
                               )}
@@ -1083,19 +1221,19 @@ export default function App() {
                             <p
                               dir="rtl"
                               lang="ar"
-                              className="font-arabic-scheherazade text-lg text-zinc-700 leading-relaxed text-right"
+                              className="font-arabic-scheherazade text-lg text-[#3F4A37] leading-relaxed text-right"
                             >
                               {meta.summaryAr}
                             </p>
                           </div>
 
-                          <div className="relative mt-4 pt-3 border-t border-[#ECE8EF]/80 flex items-center justify-between w-full text-xs font-semibold">
-                            <span className={active ? cfg.accentText : 'text-zinc-500'}>
+                          <div className="relative mt-4 pt-3 border-t border-[#DCE5D3]/80 flex items-center justify-between w-full text-xs font-semibold">
+                            <span className={active ? 'text-[#2D3B22] font-bold' : 'text-[#5A6552]'}>
                               {active ? 'Active Track' : 'Select Level'}
                             </span>
                             <ArrowRight
                               className={`h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-1 ${
-                                active ? cfg.accentText : 'text-zinc-400'
+                                active ? 'text-[#D4A338]' : 'text-[#6B7861]'
                               }`}
                               aria-hidden="true"
                             />
@@ -1106,118 +1244,17 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* Learner Study Overview: My Daily Goal + Study Metrics */}
-                <section
-                  aria-label="Study progress overview"
-                  className="grid grid-cols-1 gap-5 lg:grid-cols-12 items-stretch"
-                >
-                  <div className="lg:col-span-5 flex flex-col [&>section]:flex-1">
-                    <DailyGoalCard
-                      dailyGoal={dailyWordGoal}
-                      onChangeDailyGoal={setDailyWordGoal}
-                      vocabCards={vocabCards}
-                      todayLog={dailyLogs[todayKey]}
-                      todayKey={todayKey}
-                    />
-                  </div>
-
-                  <div className="lg:col-span-7 flex flex-col justify-between gap-4">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 flex-1">
-                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-medium text-zinc-500">Daily Streak</p>
-                          <div className="mt-1 flex items-baseline gap-1.5">
-                            <span className="font-mono text-2xl font-bold tabular-nums text-[#241734]">
-                              {effectiveStreakCount}
-                            </span>
-                            <span className="text-xs font-medium text-zinc-600">
-                              {effectiveStreakCount === 1 ? 'day' : 'days'}
-                            </span>
-                          </div>
-                          <p
-                            className={`mt-0.5 text-[11px] font-medium ${
-                              studiedToday ? 'text-[#E11D48]' : 'text-zinc-500'
-                            }`}
-                          >
-                            {studiedToday
-                              ? 'Studied today'
-                              : effectiveStreakCount > 0
-                                ? 'Study today to keep streak'
-                                : 'Open a lesson to start'}
-                          </p>
-                        </div>
-                        <div
-                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                            studiedToday
-                              ? 'bg-rose-50 text-[#E11D48]'
-                              : 'bg-[#F7F4F9] text-zinc-600'
-                          }`}
-                          aria-hidden="true"
-                        >
-                          <Flame className="h-5 w-5" />
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm flex flex-col justify-center">
-                        <p className="text-xs font-medium text-zinc-500">Current Tier</p>
-                        <p className="mt-1 font-display text-lg font-bold text-[#241734]">
-                          {levelInfo.en}{' '}
-                          <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-xl text-[#4C1D95]">
-                            · {levelInfo.ar}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm">
-                        <p className="text-xs font-medium text-zinc-500">Saved Words</p>
-                        <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#241734]">
-                          {vocabCards.length}
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm">
-                        <p className="text-xs font-medium text-zinc-500">Learned</p>
-                        <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#4C1D95]">
-                          {learnedCount}
-                        </p>
-                      </div>
-
-                      <div className="col-span-2 sm:col-span-1 rounded-2xl border border-[#ECE8EF] bg-white p-4 shadow-sm flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-medium text-zinc-500">Needs Review</p>
-                          <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#E11D48]">
-                            {reviewCount}
-                          </p>
-                        </div>
-                        {vocabCards.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => handleSelectTab('practice')}
-                            className="rounded-xl bg-[#E11D48] px-3 py-2 text-xs font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer whitespace-nowrap shadow-sm"
-                          >
-                            Practice
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-
-
                 {/* Filtered Lessons List */}
-                <section className="space-y-5">
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#ECE8EF] pb-3">
+                <section className="space-y-5 animate-fade-slide-up animate-delay-150">
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#DCE5D3] pb-3">
                     <div className="flex items-baseline gap-3">
-                      <h2 className="font-display text-2xl font-bold text-[#241734]">
+                      <h2 className="font-display text-2xl font-bold text-[#1F2718]">
                         {levelInfo.en} Lessons
                       </h2>
-                      <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#4C1D95]">
+                      <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]">
                         دروسُ المستوى {levelInfo.ar}
                       </span>
-                      <span className="font-mono text-xs tabular-nums text-zinc-500">
+                      <span className="font-mono text-xs tabular-nums text-[#5A6552]">
                         ({filteredLessons.length})
                       </span>
                     </div>
@@ -1226,18 +1263,18 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setIsAddLessonOpen(true)}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#E11D48] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#BE123C] shadow-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] px-3.5 py-2 text-xs font-semibold text-white hover:brightness-110 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <Plus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                        <span>إضافة نص جديد (Add New Text)</span>
+                        <Plus className="h-3.5 w-3.5 shrink-0 text-[#E8B948]" aria-hidden="true" />
+                        <span className="font-arabic-cairo">إضافة نص جديد (Add New Text)</span>
                       </button>
                     )}
                   </div>
 
                   {publishNotice && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-xs text-rose-950">
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9] px-4 py-3 text-xs text-[#1F2718]">
                       <div className="flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4 shrink-0 text-[#E11D48]" aria-hidden="true" />
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-[#3E522D]" aria-hidden="true" />
                         <span>
                           Added <span className="font-bold">{publishNotice.title}</span> to{' '}
                           <span className="font-semibold">
@@ -1254,7 +1291,7 @@ export default function App() {
                             setPublishNotice(null);
                             handleOpenLesson(id);
                           }}
-                          className="font-semibold text-[#4C1D95] hover:underline cursor-pointer"
+                          className="font-semibold text-[#2D3B22] hover:underline cursor-pointer"
                         >
                           Open Reader
                         </button>
@@ -1262,7 +1299,7 @@ export default function App() {
                           type="button"
                           onClick={() => setPublishNotice(null)}
                           aria-label="Dismiss added notice"
-                          className="text-[#E11D48] hover:text-rose-950 cursor-pointer"
+                          className="text-[#5A6552] hover:text-[#1F2718] cursor-pointer"
                         >
                           <X className="h-3.5 w-3.5" aria-hidden="true" />
                         </button>
@@ -1279,21 +1316,21 @@ export default function App() {
                       return (
                         <article
                           key={lesson.id}
-                          className="group flex flex-col justify-between rounded-2xl border border-[#ECE8EF] bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:border-rose-300 hover:shadow-md"
+                          className="group flex flex-col justify-between rounded-2xl border border-[#DCE5D3] bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:border-[#3E522D]/60 hover:shadow-md"
                         >
                           <div className="space-y-4">
                             <div className="flex items-center justify-between gap-3">
                               <div className="flex items-center gap-3">
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#F7F4F9] text-[#E11D48] border border-[#ECE8EF]">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]">
                                   {lesson.contentType !== 'text' && lesson.youtubeUrl ? (
-                                    <Video className="h-5 w-5" aria-hidden="true" />
+                                    <Video className="h-5 w-5 text-[#9A6F14]" aria-hidden="true" />
                                   ) : (
-                                    <BookOpen className="h-5 w-5" aria-hidden="true" />
+                                    <BookOpen className="h-5 w-5 text-[#2D3B22]" aria-hidden="true" />
                                   )}
                                 </div>
-                                <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500 font-mono tabular-nums">
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-[#5A6552] font-mono tabular-nums">
                                   <span className="inline-flex items-center gap-1">
-                                    <Clock className="h-3 w-3 text-zinc-400" aria-hidden="true" />
+                                    <Clock className="h-3 w-3 text-[#6B7861]" aria-hidden="true" />
                                     <span>{lesson.readingTimeMinutes} min</span>
                                   </span>
                                   {words > 0 && (
@@ -1305,7 +1342,7 @@ export default function App() {
                                   {lesson.contentType !== 'text' && lesson.youtubeUrl && (
                                     <>
                                       <span aria-hidden="true">·</span>
-                                      <span className="inline-flex items-center gap-1 text-[#E11D48] font-medium">
+                                      <span className="inline-flex items-center gap-1 text-[#9A6F14] font-semibold">
                                         <Video className="h-3 w-3" aria-hidden="true" />
                                         <span>Video</span>
                                       </span>
@@ -1319,7 +1356,7 @@ export default function App() {
                                   type="button"
                                   onClick={() => handleDeleteCustomLesson(lesson.id)}
                                   aria-label={`Delete custom lesson ${lesson.titleEn}`}
-                                  className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-rose-700 cursor-pointer"
+                                  className="inline-flex items-center gap-1 text-xs text-[#6B7861] hover:text-amber-800 cursor-pointer"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                                 </button>
@@ -1330,17 +1367,17 @@ export default function App() {
                               <h3
                                 dir="rtl"
                                 lang="ar"
-                                className={`${readerFontClass} text-2xl sm:text-3xl font-bold text-[#4C1D95] text-right leading-[1.9]`}
+                                className={`${readerFontClass} text-2xl sm:text-3xl font-bold text-[#2D3B22] text-right leading-[1.9]`}
                               >
                                 {applySmartPartialTashkeel(lesson.titleAr)}
                               </h3>
                               {stripTashkeel(lesson.titleEn).trim() !==
                                 stripTashkeel(lesson.titleAr).trim() && (
-                                <h4 className="font-display text-xl font-bold text-[#241734]">
+                                <h4 className="font-display text-xl font-bold text-[#1F2718]">
                                   {lesson.titleEn}
                                 </h4>
                               )}
-                              <p className="text-sm text-zinc-600 leading-relaxed">
+                              <p className="text-sm text-[#5A6552] leading-relaxed">
                                 {lesson.description}
                               </p>
                             </div>
@@ -1349,20 +1386,20 @@ export default function App() {
                               <p
                                 dir="rtl"
                                 lang="ar"
-                                className={`rounded-xl bg-[#F7F4F9] border border-[#ECE8EF] px-4 py-3 ${readerFontClass} text-lg leading-[2.15] text-[#241734] line-clamp-2`}
+                                className={`rounded-xl bg-[#FAFBF8] border border-[#DCE5D3] px-4 py-3 ${readerFontClass} text-lg leading-[2.15] text-[#1F2718] line-clamp-2`}
                               >
                                 {applySmartPartialTashkeel(firstLine)}...
                               </p>
                             ) : (
-                              <div className="rounded-xl bg-[#F7F4F9] border border-[#ECE8EF] px-4 py-3 text-xs text-zinc-600 flex items-center gap-2">
-                                <Video className="h-4 w-4 text-[#E11D48] shrink-0" aria-hidden="true" />
+                              <div className="rounded-xl bg-[#FAFBF8] border border-[#DCE5D3] px-4 py-3 text-xs text-[#5A6552] flex items-center gap-2">
+                                <Video className="h-4 w-4 text-[#D4A338] shrink-0" aria-hidden="true" />
                                 <span>YouTube video lesson — open reader to watch the embedded clip.</span>
                               </div>
                             )}
                           </div>
 
-                          <div className="mt-6 pt-4 border-t border-[#ECE8EF] flex items-center justify-between gap-2">
-                            <span className="text-xs font-medium text-zinc-500 truncate">
+                          <div className="mt-6 pt-4 border-t border-[#EEF2E9] flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium text-[#5A6552] truncate">
                               {lesson.isCustom
                                 ? `Uploaded by ${lesson.authorName || 'Contributor'}`
                                 : 'Curated Reading'}
@@ -1370,10 +1407,10 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => handleOpenLesson(lesson.id)}
-                              className="inline-flex items-center gap-1.5 rounded-xl bg-[#4C1D95] px-4 py-2 text-xs font-semibold text-white hover:bg-[#581C87] shadow-sm transition-colors shrink-0 cursor-pointer"
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] px-4 py-2 text-xs font-semibold text-white hover:brightness-110 shadow-sm transition-all active:scale-[0.98] shrink-0 cursor-pointer"
                             >
                               <span>Open Reader</span>
-                              <ArrowRight className="h-3.5 w-3.5 text-rose-200" aria-hidden="true" />
+                              <ArrowRight className="h-3.5 w-3.5 text-[#E8B948]" aria-hidden="true" />
                             </button>
                           </div>
                         </article>
@@ -1382,10 +1419,149 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* Compact Weekly Vocabulary Progress Widget above footer */}
-                <div className="pt-2">
-                  <WeeklyVocabChart vocabCards={vocabCards} dailyLogs={dailyLogs} />
-                </div>
+                {/* Unified Sleek Statistics & Weekly Vocabulary Progress Section */}
+                <section
+                  aria-label="Learning statistics and weekly progress"
+                  className="animate-fade-slide-up animate-delay-225 rounded-2xl border border-[#DCE5D3] bg-white p-5 sm:p-6 shadow-sm space-y-6"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-[#EEF2E9] pb-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]">
+                        <GraduationCap className="h-5 w-5 text-[#3E522D]" aria-hidden="true" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-baseline gap-2.5">
+                          <h2 className="font-display text-lg sm:text-xl font-bold text-[#1F2718]">
+                            Learning Overview &amp; Weekly Progress
+                          </h2>
+                          <span
+                            dir="rtl"
+                            lang="ar"
+                            className="font-arabic-cairo text-sm font-bold text-[#3B4D2B]"
+                          >
+                            ملخّص التّعلّم والإحصاءات
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#5A6552]">
+                          Your daily streak, vocabulary mastery, reading progress, and 7-day activity trend in one view.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenDifficultPractice}
+                      className="inline-flex items-center justify-center gap-1.5 self-start sm:self-auto rounded-xl bg-gradient-to-r from-[#D4A338] to-[#E8B948] px-4 py-2 text-xs font-bold text-[#1F2718] hover:brightness-105 shadow-xs transition-all active:scale-[0.98] cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <SparklesIconFallback />
+                      <span>
+                        Practice Cards{difficultCount > 0 ? ` (${difficultCount} hard)` : ''}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Unified Layout: Left Compact Stat Cards Grid + Right Weekly Chart */}
+                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
+                    <div className="lg:col-span-5 grid grid-cols-2 gap-3.5">
+                      {/* 1. Daily Streak */}
+                      <div className="rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] p-4 flex items-start justify-between gap-2.5 transition-all hover:border-[#3E522D]/50">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-[#5A6552]">Daily Streak</p>
+                          <div className="mt-1 flex items-baseline gap-1">
+                            <span className="font-mono text-2xl font-bold tabular-nums text-[#1F2718]">
+                              {effectiveStreakCount}
+                            </span>
+                            <span className="text-[11px] font-medium text-[#5A6552]">
+                              {effectiveStreakCount === 1 ? 'day' : 'days'}
+                            </span>
+                          </div>
+                          <p
+                            className={`mt-0.5 text-[11px] font-semibold truncate ${
+                              studiedToday ? 'text-[#9A6F14]' : 'text-[#6B7861]'
+                            }`}
+                          >
+                            {studiedToday ? 'Active today' : 'Read to extend'}
+                          </p>
+                        </div>
+                        <div
+                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                            studiedToday
+                              ? 'bg-[#FBF3DC] text-[#9A6F14] border-[#E8B948]/50'
+                              : 'bg-[#EEF2E9] text-[#5A6552] border-[#DCE5D3]'
+                          }`}
+                          aria-hidden="true"
+                        >
+                          <Flame className="h-4.5 w-4.5" />
+                        </div>
+                      </div>
+
+                      {/* 2. Learned Words */}
+                      <div className="rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] p-4 flex items-start justify-between gap-2.5 transition-all hover:border-[#3E522D]/50">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-[#5A6552]">Words Learned</p>
+                          <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#2D3B22]">
+                            {learnedCount}
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-medium text-[#6B7861] font-mono tabular-nums">
+                            of {vocabCards.length} saved
+                          </p>
+                        </div>
+                        <div
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]"
+                          aria-hidden="true"
+                        >
+                          <Layers className="h-4.5 w-4.5" />
+                        </div>
+                      </div>
+
+                      {/* 3. Needs Review */}
+                      <div className="rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] p-4 flex items-start justify-between gap-2.5 transition-all hover:border-[#D4A338]/70">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-[#5A6552]">Needs Review</p>
+                          <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#9A6F14]">
+                            {reviewCount}
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-medium text-[#6B7861]">
+                            Ready for SRS
+                          </p>
+                        </div>
+                        <div
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#FBF3DC] text-[#9A6F14] border border-[#E8B948]/50"
+                          aria-hidden="true"
+                        >
+                          <Award className="h-4.5 w-4.5" />
+                        </div>
+                      </div>
+
+                      {/* 4. Lessons & Active Track */}
+                      <div className="rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] p-4 flex items-start justify-between gap-2.5 transition-all hover:border-[#3E522D]/50">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-[#5A6552]">Lessons Completed</p>
+                          <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-[#1F2718]">
+                            {completedLessonsCount}
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-semibold text-[#3B4D2B] truncate">
+                            {levelInfo.en} · <span dir="rtl" lang="ar">{levelInfo.ar}</span>
+                          </p>
+                        </div>
+                        <div
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]"
+                          aria-hidden="true"
+                        >
+                          <BookOpen className="h-4.5 w-4.5" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-7 rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] p-4 sm:p-5">
+                      <WeeklyVocabChart
+                        vocabCards={vocabCards}
+                        dailyLogs={dailyLogs}
+                        embedded
+                      />
+                    </div>
+                  </div>
+                </section>
               </div>
             )}
           </>
@@ -1404,14 +1580,14 @@ export default function App() {
         {activeTab === 'vocabulary' && (
           <div className="space-y-6">
             {currentUser?.isGuest && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#ECE8EF] bg-white px-5 py-3.5 text-xs text-zinc-700 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#DCE5D3] bg-white px-5 py-3.5 text-xs text-[#5A6552] shadow-sm">
                 <span>
                   You are studying in Guest Demo mode. Sign in or register to create a dedicated personal account and add custom lessons.
                 </span>
                 <button
                   type="button"
                   onClick={() => handleOpenAuth('register')}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#E11D48] px-3.5 py-2 font-semibold text-white hover:bg-[#BE123C] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#D4A338] to-[#E8B948] px-3.5 py-2 font-bold text-[#1F2718] hover:brightness-105 transition-all cursor-pointer"
                 >
                   <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Sign In / Register</span>
@@ -1422,10 +1598,13 @@ export default function App() {
             <VocabularyView
               cards={vocabCards}
               speechRate={preferences.speechRate}
+              initialScope={practiceScopeRequest.scope}
+              scopeRequestSeq={practiceScopeRequest.seq}
               onUpdateStatus={handleUpdateVocabStatus}
+              onToggleDifficult={handleToggleDifficultCard}
+              onRateSrs={handleRateVocabCard}
               onDeleteCard={handleDeleteVocabCard}
               onGoToLessons={() => handleSelectTab('lessons')}
-              onStartPractice={() => handleSelectTab('practice')}
               onRecordReview={() => recordStudyActivity('reviewed')}
               notesCount={studyNotes.length}
               onOpenNotes={(ctx) => handleOpenNotes(ctx)}
@@ -1433,24 +1612,40 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'practice' && (
-          <PracticeMode
+        {activeTab === 'exams' && (
+          <ExamsView
             cards={vocabCards}
+            selectedLevel={selectedLevel}
             speechRate={preferences.speechRate}
-            onUpdateStatus={handleUpdateVocabStatus}
             onRateSrs={handleRateVocabCard}
-            onGoToLessons={() => handleSelectTab('lessons')}
-            onGoToVocabulary={() => handleSelectTab('vocabulary')}
             onRecordReview={() => recordStudyActivity('reviewed')}
+            onGoToLessons={() => handleSelectTab('lessons')}
+            notesCount={studyNotes.length}
+            onOpenNotes={(ctx) => handleOpenNotes(ctx)}
+          />
+        )}
+
+        {activeTab === 'conversation' && (
+          <ConversationView
+            cards={vocabCards}
+            selectedLevel={selectedLevel}
+            speechRate={preferences.speechRate}
             notesCount={studyNotes.length}
             onOpenNotes={(ctx) => handleOpenNotes(ctx)}
           />
         )}
       </main>
 
-      <footer className="border-t border-[#ECE8EF] bg-white/90 py-5 mt-12">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-xs text-zinc-500 sm:px-6 lg:px-8">
-          <span>Qalam — Contextual Arabic Reading &amp; Smart Flashcard Studio</span>
+      <footer className="border-t border-[#DCE5D3] bg-white/95 py-5 mt-12">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-xs text-[#5A6552] sm:px-6 lg:px-8">
+          <div className="space-y-0.5">
+            <p className="font-medium text-[#1F2718]">
+              Qalam — Contextual Arabic Reading &amp; Smart Flashcard Studio
+            </p>
+            <p className="text-[11px] text-[#6B7861]">
+              &copy; {new Date().getFullYear()} Qalam (قَلَم). Original Arabic learning content, exercises, and study prompts. All rights reserved.
+            </p>
+          </div>
           <span>Click or right-click any Arabic word in a lesson to translate or save</span>
         </div>
       </footer>
@@ -1469,7 +1664,7 @@ export default function App() {
         onAddToVocabulary={handleAddToVocabulary}
         onOpenVocabulary={() => {
           setWordSelection(null);
-          setActiveTab('vocabulary');
+          handleSelectTab('vocabulary');
         }}
         onClose={() => setWordSelection(null)}
       />
@@ -1505,19 +1700,42 @@ export default function App() {
             onDeleteNote={handleDeleteNote}
           />
 
+          {audioToast && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="animate-fade-slide-up fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] left-4 z-50 flex max-w-sm items-start gap-2.5 rounded-2xl border border-[#D4A338]/55 bg-[#24301B]/95 px-4 py-3 text-xs text-[#FAFBF8] shadow-xl backdrop-blur-md"
+            >
+              <Volume2 className="mt-0.5 h-4 w-4 shrink-0 text-[#E8B948]" aria-hidden="true" />
+              <span dir="auto" className="leading-relaxed">
+                {audioToast}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAudioToast(null)}
+                aria-label="Dismiss audio notification"
+                className="ml-1 rounded-md p-0.5 text-[#DCE5D3] hover:bg-white/10 hover:text-white cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
           {!isNotesOpen && (
             <button
               type="button"
               onClick={() => handleOpenNotes()}
               aria-label={`Open My Notes (${studyNotes.length} saved)`}
-              className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-4 sm:right-5 z-30 inline-flex min-h-[44px] items-center gap-2 rounded-full border border-purple-200 bg-white/95 px-4 py-2.5 text-xs font-semibold text-[#4C1D95] shadow-lg backdrop-blur-xs hover:border-[#E11D48] hover:bg-rose-50/90 transition-all cursor-pointer touch-manipulation active:scale-95"
+              className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-4 sm:right-5 z-30 inline-flex min-h-[44px] items-center gap-2 rounded-full border border-[#DCE5D3] bg-white/95 px-4 py-2 text-xs font-semibold text-[#2D3B22] shadow-lg backdrop-blur-xs hover:border-[#D4A338] hover:bg-[#FAFBF8] transition-all cursor-pointer touch-manipulation active:scale-95"
             >
-              <NotebookPen className="h-4 w-4 text-[#E11D48]" aria-hidden="true" />
-              <span dir="rtl" lang="ar" className="font-arabic-scheherazade text-base font-bold leading-none">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#FBF3DC] text-[#9A6F14]">
+                <NotebookPen className="h-3.5 w-3.5" aria-hidden="true" />
+              </span>
+              <span dir="rtl" lang="ar" className="font-arabic-cairo text-sm font-bold leading-none text-[#2D3B22]">
                 ملاحظاتي
               </span>
               {studyNotes.length > 0 && (
-                <span className="font-mono text-[11px] font-bold tabular-nums text-[#E11D48]">
+                <span className="font-mono text-[11px] font-bold tabular-nums text-[#9A6F14]">
                   ({studyNotes.length})
                 </span>
               )}
@@ -1526,5 +1744,22 @@ export default function App() {
         </>
       )}
     </div>
+  );
+}
+
+function SparklesIconFallback() {
+  return (
+    <svg
+      className="h-3.5 w-3.5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" />
+    </svg>
   );
 }

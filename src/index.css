@@ -5,7 +5,8 @@
   --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-arabic-scheherazade: "Scheherazade New", "Amiri", serif;
   --font-arabic-amiri: "Amiri", "Scheherazade New", serif;
-  --font-arabic-naskh: "Noto Naskh Arabic", "Amiri", serif;
+  --font-arabic-naskh: "Noto Naskh Arabic", "Cairo", serif;
+  --font-arabic-cairo: "Cairo", "Noto Naskh Arabic", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
@@ -18,16 +19,39 @@
 
   body {
     font-family: var(--font-sans);
-    background-color: #FDFBFC;
-    color: #241734;
+    background-color: #FAFBF8;
+    color: #1F2718;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
   }
 
   h1, h2, .font-display {
     font-family: var(--font-display);
-    color: #241734;
+    color: #1F2718;
   }
+}
+
+/* Prevent accidental dragging/selection of media, decorative graphics, and UI icons */
+img,
+picture,
+video,
+canvas,
+svg,
+.islamic-geo-pattern,
+.islamic-geo-pattern-light,
+.ui-no-select {
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Explicitly preserve smooth text selection inside reading passages, flashcards, and notes */
+textarea,
+input,
+[contenteditable="true"],
+.select-text {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Native touch ergonomics for interactive Arabic words & flashcards */
@@ -35,8 +59,8 @@
   touch-action: manipulation;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
-  user-select: none;
-  -webkit-user-select: none;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .touch-card-surface {
@@ -60,14 +84,27 @@
   word-spacing: 0.1em;
 }
 
-/* Subtle Royal Plum & Warm Peach Star Geometric Lattice Background */
+.font-arabic-cairo {
+  font-family: var(--font-arabic-cairo);
+}
+
+/* Hide scrollbars nicely for horizontal nav tabs on mobile */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Subtle Dark Olive & Warm Gold Geometric Lattice Background */
 .islamic-geo-pattern {
-  background-image: url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23ffffff' stroke-width='0.9' stroke-opacity='0.16'%3E%3Cpolygon points='40,6 49,31 74,40 49,49 40,74 31,49 6,40 31,31'/%3E%3Crect x='16' y='16' width='48' height='48' transform='rotate(45 40 40)'/%3E%3Crect x='22' y='22' width='36' height='36'/%3E%3Ccircle cx='40' cy='40' r='8'/%3E%3C/g%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23E8B948' stroke-width='0.9' stroke-opacity='0.14'%3E%3Cpolygon points='40,6 49,31 74,40 49,49 40,74 31,49 6,40 31,31'/%3E%3Crect x='16' y='16' width='48' height='48' transform='rotate(45 40 40)'/%3E%3Crect x='22' y='22' width='36' height='36'/%3E%3Ccircle cx='40' cy='40' r='8'/%3E%3C/g%3E%3C/svg%3E");
   background-size: 80px 80px;
 }
 
 .islamic-geo-pattern-light {
-  background-image: url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%234C1D95' stroke-width='0.8' stroke-opacity='0.045'%3E%3Cpolygon points='40,6 49,31 74,40 49,49 40,74 31,49 6,40 31,31'/%3E%3Crect x='16' y='16' width='48' height='48' transform='rotate(45 40 40)'/%3E%3Crect x='22' y='22' width='36' height='36'/%3E%3Ccircle cx='40' cy='40' r='8'/%3E%3C/g%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%232D3B22' stroke-width='0.8' stroke-opacity='0.045'%3E%3Cpolygon points='40,6 49,31 74,40 49,49 40,74 31,49 6,40 31,31'/%3E%3Crect x='16' y='16' width='48' height='48' transform='rotate(45 40 40)'/%3E%3Crect x='22' y='22' width='36' height='36'/%3E%3Ccircle cx='40' cy='40' r='8'/%3E%3C/g%3E%3C/svg%3E");
   background-size: 80px 80px;
 }
 
@@ -93,7 +130,34 @@
   transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Popover entrance animation */
+/* Entrance & Micro-Animation Keyframes */
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-slide-up {
+  animation: fadeSlideUp 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-delay-75 {
+  animation-delay: 75ms;
+}
+
+.animate-delay-150 {
+  animation-delay: 150ms;
+}
+
+.animate-delay-225 {
+  animation-delay: 225ms;
+}
+
 @keyframes popoverIn {
   from {
     opacity: 0;
@@ -106,7 +170,7 @@
 }
 
 .animate-popover-in {
-  animation: popoverIn 0.14s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: popoverIn 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 @keyframes gameShake {
@@ -130,12 +194,60 @@
   animation: gamePop 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+@keyframes goalCelebrate {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(232, 185, 72, 0.38), 0 4px 14px -4px rgba(212, 163, 56, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(232, 185, 72, 0), 0 6px 18px -2px rgba(232, 185, 72, 0.5);
+  }
+}
+
+.animate-goal-celebrate {
+  animation: goalCelebrate 2.6s ease-in-out infinite;
+}
+
+@keyframes cardSlideNext {
+  from {
+    opacity: 0;
+    transform: translateX(26px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes cardSlidePrev {
+  from {
+    opacity: 0;
+    transform: translateX(-26px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.animate-card-next {
+  animation: cardSlideNext 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-card-prev {
+  animation: cardSlidePrev 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .flashcard-transition,
+  .animate-fade-slide-up,
   .animate-popover-in,
   .animate-game-shake,
-  .animate-game-pop {
+  .animate-game-pop,
+  .animate-goal-celebrate,
+  .animate-card-next,
+  .animate-card-prev {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
   }
 }

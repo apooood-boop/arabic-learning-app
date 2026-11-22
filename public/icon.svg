@@ -1,18 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3B0764"/>
-      <stop offset="58%" stop-color="#4C1D95"/>
-      <stop offset="100%" stop-color="#E11D48"/>
+      <stop offset="0%" stop-color="#24301B"/>
+      <stop offset="58%" stop-color="#2D3B22"/>
+      <stop offset="100%" stop-color="#3E522D"/>
     </linearGradient>
     <linearGradient id="featherGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="55%" stop-color="#FDFBFC"/>
-      <stop offset="100%" stop-color="#FECDD3"/>
+      <stop offset="55%" stop-color="#FAFBF8"/>
+      <stop offset="100%" stop-color="#FBF3DC"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="128" fill="url(#bgGrad)"/>
   <path d="M376 96 C304 96 240 144 200 208 C168 259 152 320 136 384 C152 368 184 344 216 344 C224 344 232 348 240 356 C248 340 264 328 280 324 C288 308 304 296 320 292 C368 280 408 232 416 168 C420 132 408 104 376 96 Z" fill="url(#featherGrad)"/>
-  <path d="M136 384 L104 416 C100 420 108 428 112 424 L144 392 Z" fill="#FB7185"/>
-  <line x1="200" y1="208" x2="352" y2="136" stroke="#4C1D95" stroke-width="6" stroke-linecap="round" opacity="0.45"/>
+  <path d="M136 384 L104 416 C100 420 108 428 112 424 L144 392 Z" fill="#D4A338"/>
+  <line x1="200" y1="208" x2="352" y2="136" stroke="#2D3B22" stroke-width="6" stroke-linecap="round" opacity="0.45"/>
 </svg>

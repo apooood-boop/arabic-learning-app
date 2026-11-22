@@ -32,8 +32,8 @@ export default defineConfig(() => {
           scope: '/',
           display: 'standalone',
           orientation: 'any',
-          theme_color: '#4C1D95',
-          background_color: '#FDFBFC',
+          theme_color: '#2D3B22',
+          background_color: '#FAFBF8',
           categories: ['education', 'books'],
           icons: [
             {

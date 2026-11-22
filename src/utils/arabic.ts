@@ -640,11 +640,236 @@ export const LEVEL_LABELS: Record<
   },
 };
 
+const FIXED_FINAL_VOWEL_WORDS = new Set([
+  'هو', 'هي', 'نحن', 'انت', 'أنت', 'انتم', 'أنتم', 'ثم', 'كيف', 'اين', 'أين', 'مع', 'منذ', 'متى',
+]);
+
+const ADVERB_TANWEEN_WORDS = new Set([
+  'مبكرا', 'جدا', 'شكرا', 'دائما', 'احيانا', 'أحيانا', 'صباحا', 'مساء', 'ايضا', 'أيضا',
+  'معا', 'كثيرا', 'قليلا', 'سريعا', 'اهلا', 'أهلا', 'مرحبا', 'فعلا', 'حقا', 'طبعا',
+  'ابدا', 'أبدا', 'غدا', 'تماما', 'عادة', 'فجأة', 'حديثا', 'قديما', 'مباشرة',
+]);
+
+const ARABIC_CASE_AND_TANWEEN_MARKS = new Set([
+  '\u064B', // Tanween Fath
+  '\u064C', // Tanween Damm
+  '\u064D', // Tanween Kasr
+  '\u064E', // Fatha
+  '\u064F', // Damma
+  '\u0650', // Kasra
+]);
+
+const NO_FINAL_SUKUN_LETTERS = new Set(['ا', 'أ', 'إ', 'آ', 'ى', 'و', 'ي', 'ة']);
+
+function stripFinalIrabSingleToken(
+  token: string,
+  meta?: { wordType?: string; partOfSpeech?: string }
+): string {
+  const cleaned = token
+    .replace(/\u0640/g, '') // Remove tatweel
+    .replace(PUNCTUATION_EDGE_REGEX, '')
+    .trim();
+
+  if (!cleaned) return '';
+
+  const bare = stripTashkeel(cleaned);
+  if (FIXED_FINAL_VOWEL_WORDS.has(bare)) {
+    return cleaned;
+  }
+
+  const units: Array<{ char: string; marks: string; isArabicLetter: boolean }> = [];
+  for (const ch of cleaned) {
+    if (COMBINING_MARK_REGEX.test(ch) && units.length > 0) {
+      units[units.length - 1].marks += ch;
+    } else {
+      units.push({
+        char: ch,
+        marks: '',
+        isArabicLetter: ARABIC_LETTER_REGEX.test(ch),
+      });
+    }
+  }
+
+  const letterIndices: number[] = [];
+  units.forEach((u, idx) => {
+    if (u.isArabicLetter) letterIndices.push(idx);
+  });
+
+  if (letterIndices.length === 0) return cleaned;
+
+  const lastIdx = letterIndices[letterIndices.length - 1];
+  const prevIdx = letterIndices.length >= 2 ? letterIndices[letterIndices.length - 2] : -1;
+  const lastUnit = units[lastIdx];
+
+  const isAdverb =
+    meta?.wordType === 'ظرف' ||
+    Boolean(meta?.partOfSpeech?.toLowerCase().includes('adverb')) ||
+    ADVERB_TANWEEN_WORDS.has(bare);
+
+  // Handle accusative Tanween Fath on trailing Alef / Alef Maqsura seat (e.g. كِتَابًا -> كِتَابْ)
+  const hasTrailingTanwinSeat =
+    prevIdx >= 0 &&
+    (lastUnit.char === 'ا' || lastUnit.char === 'ى') &&
+    (units[prevIdx].marks.includes('\u064B') || lastUnit.marks.includes('\u064B'));
+
+  if (hasTrailingTanwinSeat) {
+    units[prevIdx].marks = [...units[prevIdx].marks].filter((m) => m !== '\u064B').join('');
+    lastUnit.marks = [...lastUnit.marks].filter((m) => m !== '\u064B').join('');
+
+    if (isAdverb) {
+      // Adverbs pause smoothly on -ā without nasal -an tanween
+      return units.map((u) => u.char + u.marks).join('');
+    }
+
+    // Nouns & adjectives drop the accusative Alef seat so TTS reads the base pausal stem cleanly
+    const stemUnits = units.slice(0, lastIdx);
+    const stemLast = stemUnits[stemUnits.length - 1];
+    if (
+      stemLast &&
+      stemLast.isArabicLetter &&
+      !NO_FINAL_SUKUN_LETTERS.has(stemLast.char) &&
+      !stemLast.marks.includes('\u0651') &&
+      !stemLast.marks.includes('\u0652')
+    ) {
+      stemLast.marks += '\u0652';
+    }
+    return stemUnits.map((u) => u.char + u.marks).join('');
+  }
+
+  // Also handle unvocalized accusative -an nouns ending in Alef seat when explicitly typed (e.g. فنجانا)
+  if (!hasAnyTashkeel(cleaned) && !isAdverb && bare.length >= 4 && bare.endsWith('ا') && !bare.startsWith('ال')) {
+    // Keep genuine Alef nouns like دعا/عصا/دنيا untouched; only strip obvious adverbial/tanween-alef if marked
+  }
+
+  // Keep Shaddah / Sukun / Dagger Alef on the final letter, strip grammatical case vowels & tanween
+  const keptFinalMarks = [...lastUnit.marks].filter(
+    (m) => !ARABIC_CASE_AND_TANWEEN_MARKS.has(m)
+  );
+  const hasFinalShaddah = keptFinalMarks.includes('\u0651');
+  const hasFinalSukun = keptFinalMarks.includes('\u0652');
+
+  // Add pausal Sukun on consonant endings (not on long vowels, ta marbuta, or shaddah)
+  if (
+    !hasFinalShaddah &&
+    !hasFinalSukun &&
+    !NO_FINAL_SUKUN_LETTERS.has(lastUnit.char) &&
+    letterIndices.length >= 3
+  ) {
+    keptFinalMarks.push('\u0652');
+  }
+
+  lastUnit.marks = keptFinalMarks.join('');
+  return units.map((u) => u.char + u.marks).join('');
+}
+
+/**
+ * Formats an isolated Arabic word (or short phrase) for clear, natural pausal TTS pronunciation:
+ * - Preserves internal vocalization (فتحة، كسرة، ضمة، شدة، سكون) for accurate word pronunciation
+ * - Strips grammatical case endings (الإعراب / -u, -a, -i / tanween) from the final letter
+ */
+export function stripFinalIrabForSpeech(
+  text: string,
+  meta?: { wordType?: string; partOfSpeech?: string }
+): string {
+  const normalized = text.replace(/\u0640/g, '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const words = normalized.split(' ').filter(Boolean);
+  if (words.length === 0) return '';
+
+  return words
+    .map((w, idx) =>
+      idx === words.length - 1
+        ? stripFinalIrabSingleToken(w, meta)
+        : stripFinalIrabSingleToken(w)
+    )
+    .join(' ')
+    .trim();
+}
+
+export function sanitizeArabicForSpeech(text: string): string {
+  return text
+    .replace(/\u0640/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export interface ExpressiveProsody {
+  rateMultiplier: number;
+  pitch: number;
+  style: string;
+}
+
+export function resolveExpressiveProsody(options: {
+  meaningHint?: string;
+  wordType?: string;
+  partOfSpeech?: string;
+  mode?: 'word' | 'example' | 'sentence';
+}): ExpressiveProsody {
+  const meaning = (options.meaningHint || '').toLowerCase();
+  const pos = (options.partOfSpeech || '').toLowerCase();
+  const wordType = options.wordType || '';
+
+  if (
+    /happy|happiness|delighted|smile|welcome|generos|hospital|sweet|delicious|fresh|love|joy|garden|flower|jasmine|honey|warm|bright|coffee/.test(
+      meaning
+    )
+  ) {
+    return {
+      rateMultiplier: options.mode === 'word' ? 0.94 : 0.96,
+      pitch: 1.06,
+      style:
+        'Warm, welcoming, gently uplifting native Arabic pronunciation, clear pausal articulation without case-ending inflection',
+    };
+  }
+
+  if (
+    /calm|tranquil|serenity|peace|wisdom|contemplat|ancient|history|manuscript|quiet|evening|night|reflect/.test(
+      meaning
+    )
+  ) {
+    return {
+      rateMultiplier: options.mode === 'word' ? 0.88 : 0.92,
+      pitch: 0.95,
+      style:
+        'Calm, resonant, thoughtful native Arabic pronunciation, unhurried and clear without final case endings',
+    };
+  }
+
+  if (
+    wordType === 'فعل' ||
+    pos.includes('verb') ||
+    /wake|walk|run|exit|innovat|prominent|study|read|write|drink|buy|return|manifest/.test(meaning)
+  ) {
+    return {
+      rateMultiplier: options.mode === 'word' ? 0.96 : 0.98,
+      pitch: 1.03,
+      style:
+        'Crisp, engaged, lively native Arabic pronunciation with distinct syllable clarity and pausal ending',
+    };
+  }
+
+  return {
+    rateMultiplier: options.mode === 'word' ? 0.92 : 0.96,
+    pitch: 1.0,
+    style:
+      'Natural, warm, crystal-clear native Modern Standard Arabic pronunciation in pausal form without final case endings',
+  };
+}
+
 export const TTS_UNSUPPORTED_MESSAGE_AR =
-  'متصفحك لا يدعم النطق العربي حالياً؛ جرّب متصفح Chrome أو Edge أو فعّل أصوات العربية في إعدادات جهازك';
+  'تعذّر تشغيل الصوت عبر خادم النطق أو المتصفح؛ تأكد من إعدادات الصوت في جهازك أو جرّب متصفح Chrome أو Safari';
+
+export const TTS_FAILED_MESSAGE =
+  'Could not play Arabic audio right now. تعذّر تشغيل الصوت؛ تحقق من الاتصال أو إعدادات الصوت.';
 
 export interface SpeakArabicOptions {
   rate?: number;
+  mode?: 'word' | 'example' | 'sentence';
+  vocalizedText?: string;
+  meaningHint?: string;
+  wordType?: string;
+  partOfSpeech?: string;
+  onLoading?: () => void;
   onStart?: () => void;
   onBoundary?: (charIndex: number) => void;
   onEnd?: () => void;
@@ -655,11 +880,176 @@ export interface SpeakArabicOptions {
 let cachedVoices: SpeechSynthesisVoice[] = [];
 let activeUtterance: SpeechSynthesisUtterance | null = null;
 let activeAudioElement: HTMLAudioElement | null = null;
+let activeObjectUrl: string | null = null;
+let activeBufferSource: AudioBufferSourceNode | null = null;
+let activeFetchController: AbortController | null = null;
+let activeBoundaryRaf: number | null = null;
+let sharedAudioContext: AudioContext | null = null;
+let audioContextUnlocked = false;
 let pendingSpeakTimer: number | null = null;
 let startWatchdogTimer: number | null = null;
 let safetyEndTimer: number | null = null;
 let currentSpeechSession = 0;
 let activeEndCallback: (() => void) | null = null;
+
+const clientTtsAudioCache = new Map<string, { buffer: ArrayBuffer; contentType: string }>();
+const MAX_CLIENT_TTS_CACHE = 200;
+const CLIENT_GEMINI_COOLDOWN_KEY = 'qalam_gemini_tts_cooldown_until';
+let clientGeminiTtsCooldownUntil = 0;
+
+function getClientGeminiCooldownUntil(): number {
+  if (clientGeminiTtsCooldownUntil > Date.now()) return clientGeminiTtsCooldownUntil;
+  try {
+    const raw = window.sessionStorage?.getItem(CLIENT_GEMINI_COOLDOWN_KEY);
+    const parsed = raw ? Number(raw) : 0;
+    if (Number.isFinite(parsed) && parsed > Date.now()) {
+      clientGeminiTtsCooldownUntil = parsed;
+      return parsed;
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return 0;
+}
+
+function setClientGeminiCooldown(durationMs: number): void {
+  const until = Date.now() + durationMs;
+  clientGeminiTtsCooldownUntil = until;
+  try {
+    window.sessionStorage?.setItem(CLIENT_GEMINI_COOLDOWN_KEY, String(until));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function setClientTtsCache(key: string, value: { buffer: ArrayBuffer; contentType: string }) {
+  if (clientTtsAudioCache.size >= MAX_CLIENT_TTS_CACHE) {
+    const oldestKey = clientTtsAudioCache.keys().next().value;
+    if (oldestKey) clientTtsAudioCache.delete(oldestKey);
+  }
+  clientTtsAudioCache.set(key, value);
+}
+
+function getClientViteGeminiApiKey(): string | null {
+  try {
+    const metaEnv =
+      typeof import.meta !== 'undefined'
+        ? (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+        : undefined;
+    const raw =
+      metaEnv?.VITE_GEMINI_API_KEY?.trim() ||
+      metaEnv?.VITE_API_KEY?.trim();
+    if (!raw || raw === 'MY_GEMINI_API_KEY') return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function getOrCreateAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return null;
+
+  if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+    sharedAudioContext = new AudioCtx();
+    audioContextUnlocked = false;
+  }
+  return sharedAudioContext;
+}
+
+/**
+ * Must be called synchronously inside user-click / keydown gesture handlers
+ * BEFORE any async fetch/await so Chrome, Safari, and mobile browsers allow audio playback.
+ */
+export function unlockArabicAudioContext(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const ctx = getOrCreateAudioContext();
+    if (ctx) {
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {
+          // Will retry during playback
+        });
+      }
+      if (!audioContextUnlocked) {
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.start(0);
+        audioContextUnlocked = true;
+      }
+    }
+  } catch {
+    // Non-fatal if AudioContext cannot be created
+  }
+
+  if ('speechSynthesis' in window) {
+    try {
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+function decodeBase64AudioToWavBuffer(base64Data: string, mimeType?: string): ArrayBuffer {
+  const binary = window.atob(base64Data);
+  const rawBytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    rawBytes[i] = binary.charCodeAt(i);
+  }
+
+  // Already a WAV container (starts with 'RIFF') or MP3/OGG audio
+  const hasRiffHeader =
+    rawBytes.length >= 4 &&
+    rawBytes[0] === 0x52 &&
+    rawBytes[1] === 0x49 &&
+    rawBytes[2] === 0x46 &&
+    rawBytes[3] === 0x46;
+
+  if (hasRiffHeader || (mimeType && !/l16|pcm/i.test(mimeType) && /wav|mpeg|mp3|ogg|webm/i.test(mimeType))) {
+    return rawBytes.buffer;
+  }
+
+  // Raw 16-bit mono PCM (audio/L16 or audio/pcm): prepend a 44-byte RIFF/WAVE header
+  const rateMatch = mimeType?.match(/rate=(\d+)/i);
+  const sampleRate = rateMatch ? Number(rateMatch[1]) || 24000 : 24000;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+
+  const wavBuffer = new ArrayBuffer(44 + rawBytes.byteLength);
+  const view = new DataView(wavBuffer);
+  const writeAscii = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 36 + rawBytes.byteLength, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, rawBytes.byteLength, true);
+
+  new Uint8Array(wavBuffer, 44).set(rawBytes);
+  return wavBuffer;
+}
 
 if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
   const loadVoices = () => {
@@ -672,6 +1062,23 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
   window.speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
 }
 
+function scoreArabicVoice(voice: SpeechSynthesisVoice): number {
+  const lang = voice.lang.toLowerCase();
+  if (!lang.startsWith('ar')) return -1;
+
+  let score = 0;
+  if (lang === 'ar-sa') score += 30;
+  else if (lang === 'ar-001' || lang === 'ar-eg' || lang === 'ar-ae') score += 22;
+  else score += 12;
+
+  const name = voice.name.toLowerCase();
+  if (/natural|neural|online/.test(name)) score += 50;
+  if (/google|microsoft|siri|apple/.test(name)) score += 20;
+  if (/tarik|maged|laila|salma|zariyah|hamed|mariam|naayf/.test(name)) score += 18;
+  if (!voice.localService) score += 8;
+  return score;
+}
+
 function resolveArabicVoice(): SpeechSynthesisVoice | undefined {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return undefined;
   const voices = window.speechSynthesis.getVoices();
@@ -679,10 +1086,12 @@ function resolveArabicVoice(): SpeechSynthesisVoice | undefined {
     cachedVoices = voices;
   }
   const pool = voices.length > 0 ? voices : cachedVoices;
-  return (
-    pool.find((v) => v.lang.toLowerCase() === 'ar-sa') ??
-    pool.find((v) => v.lang.toLowerCase().startsWith('ar'))
-  );
+  const ranked = pool
+    .map((v) => ({ v, score: scoreArabicVoice(v) }))
+    .filter((item) => item.score >= 0)
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0]?.v;
 }
 
 function clearSpeechTimers() {
@@ -698,9 +1107,33 @@ function clearSpeechTimers() {
     window.clearTimeout(safetyEndTimer);
     safetyEndTimer = null;
   }
+  if (activeBoundaryRaf !== null) {
+    window.cancelAnimationFrame(activeBoundaryRaf);
+    activeBoundaryRaf = null;
+  }
 }
 
 function releaseActiveAudio() {
+  if (activeFetchController) {
+    try {
+      activeFetchController.abort();
+    } catch {
+      // Ignore abort errors
+    }
+    activeFetchController = null;
+  }
+
+  if (activeBufferSource) {
+    try {
+      activeBufferSource.onended = null;
+      activeBufferSource.stop();
+      activeBufferSource.disconnect();
+    } catch {
+      // Ignore Web Audio teardown errors
+    }
+    activeBufferSource = null;
+  }
+
   if (activeAudioElement) {
     try {
       activeAudioElement.onplay = null;
@@ -715,13 +1148,22 @@ function releaseActiveAudio() {
     }
     activeAudioElement = null;
   }
+
+  if (activeObjectUrl) {
+    try {
+      URL.revokeObjectURL(activeObjectUrl);
+    } catch {
+      // Ignore URL revoke errors
+    }
+    activeObjectUrl = null;
+  }
 }
 
-function notifyTtsUnsupported(options?: SpeakArabicOptions) {
-  options?.onUnsupportedNotice?.(TTS_UNSUPPORTED_MESSAGE_AR);
+function notifyTtsNotice(message: string, options?: SpeakArabicOptions) {
+  options?.onUnsupportedNotice?.(message);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
-      new CustomEvent('qalam:tts-notice', { detail: { message: TTS_UNSUPPORTED_MESSAGE_AR } })
+      new CustomEvent('qalam:tts-notice', { detail: { message } })
     );
   }
 }
@@ -733,14 +1175,46 @@ export function speakArabic(
   const options: SpeakArabicOptions =
     typeof optionsOrRate === 'number' ? { rate: optionsOrRate } : optionsOrRate;
 
-  const rate = options.rate ?? 0.92;
-  const cleanDisplay = text.trim();
-  const ttsText = stripTashkeel(cleanDisplay).replace(/\s+/g, ' ').trim();
+  // CRITICAL: Unlock Web AudioContext synchronously inside user click/tap gesture before any async work
+  unlockArabicAudioContext();
+
+  const baseRate = options.rate ?? 0.92;
+  const mode = options.mode ?? 'sentence';
+  const sourceText = (options.vocalizedText || text).trim();
+
+  let ttsText = '';
+  let karaokeText = '';
+  if (mode === 'word') {
+    ttsText = stripFinalIrabForSpeech(sourceText, {
+      wordType: options.wordType,
+      partOfSpeech: options.partOfSpeech,
+    });
+    karaokeText = ttsText;
+  } else if (mode === 'example') {
+    ttsText = sanitizeArabicForSpeech(sourceText);
+    karaokeText = ttsText;
+  } else {
+    // Keep expressive vocalization for neural AI TTS while tracking stripped length for karaoke boundary indices
+    ttsText = sanitizeArabicForSpeech(sourceText);
+    karaokeText = stripTashkeel(sourceText).replace(/\s+/g, ' ').trim();
+  }
 
   if (!ttsText || typeof window === 'undefined') {
     options.onEnd?.();
     return false;
   }
+
+  const prosody = resolveExpressiveProsody({
+    meaningHint: options.meaningHint,
+    wordType: options.wordType,
+    partOfSpeech: options.partOfSpeech,
+    mode,
+  });
+
+  const effectiveRate = Math.max(
+    0.7,
+    Math.min(1.25, Number((baseRate * prosody.rateMultiplier).toFixed(2)))
+  );
 
   currentSpeechSession += 1;
   const sessionId = currentSpeechSession;
@@ -754,8 +1228,11 @@ export function speakArabic(
     prevEnd();
   }
 
+  let didCancelActiveSpeech = false;
   if ('speechSynthesis' in window) {
     try {
+      didCancelActiveSpeech =
+        window.speechSynthesis.speaking || window.speechSynthesis.pending;
       window.speechSynthesis.cancel();
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
@@ -777,34 +1254,238 @@ export function speakArabic(
     cb?.();
   };
 
-  const failAndNotify = () => {
+  const failAndNotify = (reason?: string) => {
     if (currentSpeechSession !== sessionId) return;
-    notifyTtsUnsupported(options);
-    options.onError?.(TTS_UNSUPPORTED_MESSAGE_AR);
+    const msg = reason || TTS_FAILED_MESSAGE;
+    console.error('[Qalam Audio] All Arabic TTS playback methods failed.', msg);
+    notifyTtsNotice(msg, options);
+    options.onError?.(msg);
     finalize();
   };
 
-  const playAudioFallback = (attemptDirectGoogle = false) => {
-    if (currentSpeechSession !== sessionId) return;
-    clearSpeechTimers();
-    releaseActiveAudio();
+  const tryBrowserSpeechSynthesis = (
+    onUnavailableOrError: () => void,
+    syncUserGesture = false
+  ): boolean => {
+    const hasSpeechApi =
+      'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+    if (!hasSpeechApi) {
+      console.warn('[Qalam Audio] Web Speech API (speechSynthesis) is not supported in this browser.');
+      return false;
+    }
 
-    if ('speechSynthesis' in window) {
+    const arabicVoice = resolveArabicVoice();
+
+    try {
+      const browserSpeechText = mode === 'sentence' ? karaokeText : ttsText;
+      const utterance = new SpeechSynthesisUtterance(browserSpeechText);
+      utterance.lang = arabicVoice?.lang || 'ar-SA';
+      if (arabicVoice) {
+        utterance.voice = arabicVoice;
+      }
+      utterance.rate = effectiveRate;
+      utterance.pitch = prosody.pitch;
+      utterance.volume = 1;
+
+      activeUtterance = utterance;
+      let speechStarted = false;
+      let notifiedStart = false;
+      const notifyStartOnce = () => {
+        if (notifiedStart || currentSpeechSession !== sessionId) return;
+        notifiedStart = true;
+        options.onStart?.();
+      };
+
+      utterance.onstart = () => {
+        if (currentSpeechSession !== sessionId) return;
+        speechStarted = true;
+        if (startWatchdogTimer !== null) {
+          window.clearTimeout(startWatchdogTimer);
+          startWatchdogTimer = null;
+        }
+        notifyStartOnce();
+      };
+
+      utterance.onboundary = (event: SpeechSynthesisEvent) => {
+        if (currentSpeechSession !== sessionId) return;
+        if (typeof event.charIndex === 'number') {
+          options.onBoundary?.(event.charIndex);
+        }
+      };
+
+      utterance.onend = () => {
+        finalize();
+      };
+
+      utterance.onerror = (event) => {
+        if (currentSpeechSession !== sessionId) return;
+        // 'interrupted' / 'canceled' happens intentionally on stopArabicSpeech()
+        if (event.error === 'interrupted' || event.error === 'canceled') {
+          return;
+        }
+        console.warn('[Qalam Audio] Web Speech API playback error:', event.error);
+        activeUtterance = null;
+        onUnavailableOrError();
+      };
+
+      const startSpeaking = () => {
+        if (currentSpeechSession !== sessionId) return;
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
+        window.speechSynthesis.speak(utterance);
+
+        // Watchdog in case browser silently ignores speak() without firing onstart/onerror
+        startWatchdogTimer = window.setTimeout(() => {
+          if (currentSpeechSession !== sessionId || speechStarted) return;
+          console.warn('[Qalam Audio] Web Speech API did not start within 900ms, triggering fallback.');
+          activeUtterance = null;
+          try {
+            window.speechSynthesis.cancel();
+          } catch {
+            // Ignore
+          }
+          onUnavailableOrError();
+        }, 900);
+
+        const estimatedMs = Math.max(
+          2800,
+          Math.min(22000, (ttsText.length * 175) / Math.max(0.5, effectiveRate))
+        );
+        safetyEndTimer = window.setTimeout(finalize, estimatedMs);
+      };
+
+      notifyStartOnce();
+
+      if (syncUserGesture && !didCancelActiveSpeech) {
+        startSpeaking();
+      } else {
+        pendingSpeakTimer = window.setTimeout(startSpeaking, 25);
+      }
+
+      return true;
+    } catch (err) {
+      console.error('[Qalam Audio] Failed to initialize SpeechSynthesisUtterance:', err);
+      return false;
+    }
+  };
+
+  const playAudioBufferThroughContext = async (
+    audioBuffer: ArrayBuffer,
+    contentType: string
+  ): Promise<void> => {
+    if (currentSpeechSession !== sessionId) return;
+
+    const ctx = getOrCreateAudioContext();
+    if (ctx) {
       try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // Ignore
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+        const decoded = await ctx.decodeAudioData(audioBuffer.slice(0));
+        if (currentSpeechSession !== sessionId) return;
+
+        const source = ctx.createBufferSource();
+        source.buffer = decoded;
+        source.playbackRate.value = Math.max(0.68, Math.min(1.4, effectiveRate));
+        source.connect(ctx.destination);
+        activeBufferSource = source;
+
+        const expectedDurationMs = Math.max(
+          450,
+          (decoded.duration * 1000) / Math.max(0.5, source.playbackRate.value)
+        );
+        const startedAt = performance.now();
+
+        options.onStart?.();
+
+        if (options.onBoundary && karaokeText.length > 0) {
+          const tickBoundary = () => {
+            if (currentSpeechSession !== sessionId || activeBufferSource !== source) return;
+            const elapsed = performance.now() - startedAt;
+            const progress = Math.max(0, Math.min(1, elapsed / expectedDurationMs));
+            options.onBoundary?.(Math.floor(progress * karaokeText.length));
+            if (progress < 1) {
+              activeBoundaryRaf = window.requestAnimationFrame(tickBoundary);
+            }
+          };
+          activeBoundaryRaf = window.requestAnimationFrame(tickBoundary);
+        }
+
+        source.onended = () => {
+          if (currentSpeechSession !== sessionId) return;
+          finalize();
+        };
+
+        source.start(0);
+        safetyEndTimer = window.setTimeout(finalize, expectedDurationMs + 1500);
+        return;
+      } catch (ctxErr) {
+        console.warn(
+          '[Qalam Audio] Web Audio decode/playback fallback to HTMLAudioElement:',
+          ctxErr instanceof Error ? ctxErr.message : ctxErr
+        );
       }
     }
 
-    const encoded = encodeURIComponent(ttsText.slice(0, 900));
-    const url = attemptDirectGoogle
-      ? `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(ttsText.slice(0, 180))}&tl=ar&client=tw-ob`
-      : `/api/tts?q=${encoded}`;
+    // Fallback to Blob HTMLAudioElement if AudioContext decoding fails
+    const blob = new Blob([audioBuffer], { type: contentType || 'audio/mpeg' });
+    const objectUrl = URL.createObjectURL(blob);
+    activeObjectUrl = objectUrl;
 
+    const audio = new Audio(objectUrl);
+    audio.playbackRate = Math.max(0.68, Math.min(1.4, effectiveRate));
+    activeAudioElement = audio;
+
+    audio.ontimeupdate = () => {
+      if (currentSpeechSession !== sessionId) return;
+      if (audio.duration && Number.isFinite(audio.duration) && audio.duration > 0) {
+        const progress = Math.max(0, Math.min(1, audio.currentTime / audio.duration));
+        options.onBoundary?.(Math.floor(progress * karaokeText.length));
+      }
+    };
+
+    audio.onended = () => finalize();
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      audio.onplay = () => {
+        if (!settled) {
+          settled = true;
+          options.onStart?.();
+          resolve();
+        }
+      };
+      audio.onerror = () => {
+        if (!settled) {
+          settled = true;
+          reject(new Error('HTMLAudioElement failed to play blob audio.'));
+        }
+      };
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch((err) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
+      }
+    });
+
+    const estimatedMs = Math.max(
+      2600,
+      Math.min(22000, (ttsText.length * 175) / Math.max(0.5, effectiveRate))
+    );
+    safetyEndTimer = window.setTimeout(finalize, estimatedMs);
+  };
+
+  const playDirectGoogleAudioTag = (onErrorFallback: () => void) => {
+    if (currentSpeechSession !== sessionId) return;
+    const directUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(ttsText.slice(0, 180))}&tl=ar&client=tw-ob`;
     try {
-      const audio = new Audio(url);
-      audio.playbackRate = Math.max(0.65, Math.min(1.5, rate));
+      const audio = new Audio(directUrl);
+      audio.playbackRate = Math.max(0.68, Math.min(1.4, effectiveRate));
       activeAudioElement = audio;
       let started = false;
 
@@ -813,133 +1494,232 @@ export function speakArabic(
         started = true;
         options.onStart?.();
       };
-
-      audio.ontimeupdate = () => {
-        if (currentSpeechSession !== sessionId) return;
-        if (audio.duration && Number.isFinite(audio.duration) && audio.duration > 0) {
-          const progress = Math.max(0, Math.min(1, audio.currentTime / audio.duration));
-          const approxCharIndex = Math.floor(progress * ttsText.length);
-          options.onBoundary?.(approxCharIndex);
-        }
-      };
-
-      audio.onended = () => {
-        finalize();
-      };
-
+      audio.onended = () => finalize();
       audio.onerror = () => {
         if (currentSpeechSession !== sessionId) return;
-        if (!attemptDirectGoogle) {
-          playAudioFallback(true);
-        } else {
-          failAndNotify();
-        }
+        console.warn('[Qalam Audio] Direct Google TTS <audio> failed.');
+        onErrorFallback();
       };
 
-      // Optimistic start indicator so button responds immediately
-      options.onStart?.();
-
-      const playPromise = audio.play();
-      if (playPromise && typeof playPromise.catch === 'function') {
-        playPromise.catch(() => {
-          if (currentSpeechSession !== sessionId) return;
-          if (!started && !attemptDirectGoogle) {
-            playAudioFallback(true);
-          } else if (!started) {
-            failAndNotify();
-          }
+      const p = audio.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch((err) => {
+          if (currentSpeechSession !== sessionId || started) return;
+          console.warn('[Qalam Audio] Direct Google TTS play() rejected:', err);
+          onErrorFallback();
         });
       }
-
-      const estimatedMs = Math.max(
-        2500,
-        Math.min(20000, (ttsText.length * 165) / Math.max(0.5, rate))
-      );
-      safetyEndTimer = window.setTimeout(finalize, estimatedMs);
+      safetyEndTimer = window.setTimeout(finalize, 12000);
     } catch {
-      if (!attemptDirectGoogle) {
-        playAudioFallback(true);
-      } else {
-        failAndNotify();
-      }
+      onErrorFallback();
     }
   };
 
-  const hasSpeechApi = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
-  const arabicVoice = hasSpeechApi ? resolveArabicVoice() : undefined;
+  const fetchAndPlayAiAudio = async (allowSpeechSynthesisFallback: boolean) => {
+    if (currentSpeechSession !== sessionId) return;
 
-  if (!hasSpeechApi || !arabicVoice) {
-    playAudioFallback(false);
-    return true;
-  }
+    const cleanForUrl = ttsText.slice(0, 900);
+    const cacheKey = `${mode}::${cleanForUrl}`;
+    const cached = clientTtsAudioCache.get(cacheKey);
 
-  try {
-    const utterance = new SpeechSynthesisUtterance(ttsText);
-    utterance.lang = 'ar-SA';
-    utterance.voice = arabicVoice;
-    utterance.rate = rate;
-    utterance.pitch = 1;
-    utterance.volume = 1;
-
-    activeUtterance = utterance;
-    let speechStarted = false;
-
-    utterance.onstart = () => {
-      if (currentSpeechSession !== sessionId) return;
-      speechStarted = true;
-      if (startWatchdogTimer !== null) {
-        window.clearTimeout(startWatchdogTimer);
-        startWatchdogTimer = null;
+    if (cached) {
+      try {
+        await playAudioBufferThroughContext(cached.buffer, cached.contentType);
+        return;
+      } catch (err) {
+        console.warn('[Qalam Audio] Cached clip failed, refetching:', err);
+        clientTtsAudioCache.delete(cacheKey);
       }
-      options.onStart?.();
-    };
+    }
 
-    utterance.onboundary = (event: SpeechSynthesisEvent) => {
-      if (currentSpeechSession !== sessionId) return;
-      if (typeof event.charIndex === 'number') {
-        options.onBoundary?.(event.charIndex);
+    options.onLoading?.();
+
+    const controller = new AbortController();
+    activeFetchController = controller;
+    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+
+    try {
+      let fetchedBuffer: ArrayBuffer | null = null;
+      let fetchedContentType = 'audio/mpeg';
+
+      // 1. Try full-stack backend proxy `/api/tts` (uses server GEMINI_API_KEY with quota circuit breaker + Google TTS stream)
+      try {
+        const params = new URLSearchParams({
+          q: cleanForUrl,
+          mode,
+          style: prosody.style,
+        });
+        const res = await fetch(`/api/tts?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+
+        if (res.ok && ct.startsWith('audio/')) {
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength > 100) {
+            fetchedBuffer = buf;
+            fetchedContentType = ct;
+          }
+        } else {
+          // On static deployments (e.g. Cloudflare Pages SPA fallback), /api/tts returns 404 or text/html
+          console.info(
+            `[Qalam Audio] /api/tts unavailable (status=${res.status}); trying fallback audio pipeline.`
+          );
+        }
+      } catch (serverErr) {
+        if ((serverErr as Error)?.name === 'AbortError') {
+          throw serverErr;
+        }
+        console.info(
+          '[Qalam Audio] /api/tts unavailable:',
+          serverErr instanceof Error ? serverErr.message : serverErr
+        );
       }
-    };
 
-    utterance.onend = () => {
-      finalize();
-    };
+      // 2. If /api/tts is unavailable (e.g., static Cloudflare Pages/Workers host) and VITE_GEMINI_API_KEY is set,
+      // call Gemini TTS REST API directly when not in quota cooldown
+      if (!fetchedBuffer && Date.now() >= getClientGeminiCooldownUntil()) {
+        const clientGeminiKey = getClientViteGeminiApiKey();
+        if (clientGeminiKey) {
+          try {
+            const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${encodeURIComponent(clientGeminiKey)}`;
+            const geminiRes = await fetch(geminiEndpoint, {
+              method: 'POST',
+              signal: controller.signal,
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    role: 'user',
+                    parts: [
+                      {
+                        text: cleanForUrl,
+                        speechMetadata: {
+                          style: prosody.style,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  responseModalities: ['AUDIO'],
+                  speechConfig: {
+                    voiceConfig: {
+                      prebuiltVoiceConfig: { voiceName: 'Kore' },
+                    },
+                  },
+                },
+              }),
+            });
 
-    utterance.onerror = () => {
-      if (currentSpeechSession !== sessionId) return;
-      activeUtterance = null;
-      // Seamless fallback to MP3 stream if browser speech fails
-      playAudioFallback(false);
-    };
-
-    options.onStart?.();
-
-    pendingSpeakTimer = window.setTimeout(() => {
-      if (currentSpeechSession !== sessionId) return;
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
+            if (!geminiRes.ok) {
+              const errText = await geminiRes.text().catch(() => '');
+              if (geminiRes.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(errText)) {
+                setClientGeminiCooldown(60 * 60 * 1000);
+                console.info('[Qalam Audio] Direct Gemini TTS quota reached; using browser speech synthesis.');
+              } else {
+                console.info(`[Qalam Audio] Direct Gemini TTS unavailable (${geminiRes.status}); falling back.`);
+              }
+            } else {
+              const json = (await geminiRes.json()) as {
+                candidates?: Array<{
+                  content?: {
+                    parts?: Array<{
+                      inlineData?: { data?: string; mimeType?: string };
+                    }>;
+                  };
+                }>;
+              };
+              const inlineData = json.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+              if (inlineData?.data) {
+                fetchedBuffer = decodeBase64AudioToWavBuffer(
+                  inlineData.data,
+                  inlineData.mimeType
+                );
+                fetchedContentType = 'audio/wav';
+              }
+            }
+          } catch (geminiErr) {
+            if ((geminiErr as Error)?.name === 'AbortError') {
+              throw geminiErr;
+            }
+            console.info(
+              '[Qalam Audio] Direct Gemini TTS request failed, falling back:',
+              geminiErr instanceof Error ? geminiErr.message : geminiErr
+            );
+          }
+        }
       }
-      window.speechSynthesis.speak(utterance);
 
-      // If browser silently drops utterance without firing onstart within 550ms, use Audio fallback
-      startWatchdogTimer = window.setTimeout(() => {
-        if (currentSpeechSession !== sessionId || speechStarted) return;
-        activeUtterance = null;
-        playAudioFallback(false);
-      }, 550);
+      window.clearTimeout(timeoutId);
+      if (activeFetchController === controller) {
+        activeFetchController = null;
+      }
+      if (currentSpeechSession !== sessionId) return;
 
-      const estimatedMs = Math.max(
-        2500,
-        Math.min(18000, (ttsText.length * 165) / Math.max(0.5, rate))
+      if (fetchedBuffer) {
+        setClientTtsCache(cacheKey, {
+          buffer: fetchedBuffer,
+          contentType: fetchedContentType,
+        });
+        await playAudioBufferThroughContext(fetchedBuffer, fetchedContentType);
+        return;
+      }
+
+      // 3. Automatic fallback to Web Speech API (ar-SA / ar) when AI audio endpoints are unavailable
+      if (allowSpeechSynthesisFallback) {
+        const startedSpeech = tryBrowserSpeechSynthesis(() => {
+          playDirectGoogleAudioTag(() => failAndNotify());
+        });
+        if (startedSpeech) return;
+      }
+
+      playDirectGoogleAudioTag(() => failAndNotify());
+    } catch (err) {
+      window.clearTimeout(timeoutId);
+      if (activeFetchController === controller) {
+        activeFetchController = null;
+      }
+      if (currentSpeechSession !== sessionId) return;
+
+      console.info(
+        '[Qalam Audio] AI audio pipeline timed out or aborted, falling back to browser SpeechSynthesis:',
+        err instanceof Error ? err.message : err
       );
-      safetyEndTimer = window.setTimeout(finalize, estimatedMs);
-    }, 35);
 
-    return true;
-  } catch {
-    playAudioFallback(false);
+      if (allowSpeechSynthesisFallback) {
+        const startedSpeech = tryBrowserSpeechSynthesis(() => {
+          playDirectGoogleAudioTag(() => failAndNotify());
+        });
+        if (startedSpeech) return;
+      }
+
+      playDirectGoogleAudioTag(() => failAndNotify());
+    }
+  };
+
+  const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+
+  // Unified expressive pronunciation pipeline across standalone words, card examples, AND lesson reading passages:
+  // /api/tts -> VITE_GEMINI_API_KEY neural TTS -> unlocked AudioContext -> automatic Web Speech (ar-SA/ar) fallback.
+  if (isOnline) {
+    void fetchAndPlayAiAudio(true);
     return true;
   }
+
+  const startedBrowserSpeech = tryBrowserSpeechSynthesis(
+    () => {
+      failAndNotify();
+    },
+    true
+  );
+
+  if (!startedBrowserSpeech) {
+    failAndNotify();
+  }
+  return true;
 }
 
 export function stopArabicSpeech(): void {
