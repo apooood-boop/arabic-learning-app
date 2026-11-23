@@ -501,7 +501,7 @@ async function generateGeminiJson<T>(params: {
       : setTimeout(() => controller.abort(), params.timeoutMs ?? 6500);
 
   try {
-    const { response, errorBody } = await fetchGeminiGenerateContent({
+    const { response, errorBody, url } = await fetchGeminiGenerateContent({
       model: GEMINI_MODEL,
       apiKey,
       signal: controller.signal,
@@ -524,9 +524,19 @@ async function generateGeminiJson<T>(params: {
     });
 
     if (!response.ok) {
+      let extractedMessage = '';
+      try {
+        const parsed = JSON.parse(errorBody) as { error?: { message?: string } };
+        if (parsed?.error?.message) {
+          extractedMessage = parsed.error.message;
+        }
+      } catch {
+        // not json
+      }
+      const targetUrl = url || `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+      const detail = extractedMessage || errorBody || response.statusText;
       console.error(
-        `[Gemini Client] ${GEMINI_MODEL} returned HTTP ${response.status} ${response.statusText}:`,
-        errorBody
+        `[Gemini Client] Request to ${targetUrl} failed (HTTP ${response.status} ${response.statusText}): ${detail}`
       );
       if (response.status === 429 || /RESOURCE_EXHAUSTED|quota|rate[- ]?limit/i.test(errorBody)) {
         const quota = parseGeminiQuotaInfo(errorBody, 'text');
