@@ -31,6 +31,7 @@ import { Navbar } from './components/Navbar';
 import { NotesDrawer } from './components/NotesDrawer';
 import { PracticeScope } from './components/PracticeMode';
 import { ReadingHistoryView } from './components/ReadingHistoryView';
+import { UserManagementModal } from './components/UserManagementModal';
 import { VocabularyView } from './components/VocabularyView';
 import { DailyStudyLog, WeeklyVocabChart } from './components/WeeklyVocabChart';
 import { ActiveWordSelection, WordContextMenu } from './components/WordContextMenu';
@@ -52,16 +53,32 @@ import {
   VocabCard,
   WordAnalysis,
 } from './types/arabic';
-import { getActiveUser, logoutUser } from './utils/auth';
+import { getActiveUser, isAdminUser, logoutUser } from './utils/auth';
+import { isSupabaseConfigured } from './utils/supabaseClient';
+import {
+  fetchStudyNotesFromCloud,
+  fetchUserProgressFromCloud,
+  fetchVocabCardsFromCloud,
+  upsertStudyNotesToCloud,
+  upsertUserProgressToCloud,
+  upsertVocabCardsToCloud,
+} from './utils/supabaseSync';
 import {
   applySmartPartialTashkeel,
   countArabicWords,
   getArabicFontClass,
+  invalidateCachedArabicAudio,
   LEVEL_LABELS,
   normalizeArabicWord,
+  normalizeStandaloneArabicKey,
+  normalizeStandaloneVocabWord,
+  stripFinalIrabForSpeech,
   stripTashkeel,
 } from './utils/arabic';
-import { analyzeArabicWordClient } from './utils/geminiClient';
+import {
+  analyzeArabicWordClient,
+  isFakePlaceholderTranslation,
+} from './utils/geminiClient';
 
 const DEFAULT_PREFERENCES: ReaderPreferences = {
   showTashkeel: true,
@@ -222,6 +239,9 @@ export default function App() {
   const [activeNavSection, setActiveNavSection] = useState<
     'home' | 'history' | 'levels' | 'vocabulary' | 'exams' | 'conversation'
   >('home');
+  const [activeHeroSwitch, setActiveHeroSwitch] = useState<
+    'levels' | 'practice' | 'notes' | 'addText' | null
+  >(null);
   const [selectedLevel, setSelectedLevel] = useLocalStorage<ProficiencyLevel>(
     `qalam_selected_level_v2::${sessionScope}`,
     'beginner'
@@ -274,6 +294,7 @@ export default function App() {
   }>({ scope: 'all', seq: 0 });
   const [isAddLessonOpen, setIsAddLessonOpen] = useState(false);
   const [isNotesOpen, setIsNotesOpen] = useState(false);
+  const [isUserManagementOpen, setIsUserManagementOpen] = useState(false);
   const [notesContext, setNotesContext] = useState<NoteContextTag | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
   const [audioToast, setAudioToast] = useState<string | null>(null);
@@ -312,14 +333,158 @@ export default function App() {
         }, 5500);
       }
     };
+    const handleQuotaNotice = (event: Event) => {
+      const custom = event as CustomEvent<{ message?: string }>;
+      if (custom.detail?.message) {
+        setApiNotice(custom.detail.message);
+      }
+    };
+
     window.addEventListener('qalam:tts-notice', handleTtsNotice);
+    window.addEventListener('qalam:quota-notice', handleQuotaNotice);
     return () => {
       window.removeEventListener('qalam:tts-notice', handleTtsNotice);
+      window.removeEventListener('qalam:quota-notice', handleQuotaNotice);
       if (audioToastTimerRef.current !== null) {
         window.clearTimeout(audioToastTimerRef.current);
       }
     };
   }, []);
+
+  // Bi-directional Supabase Cloud Data Sync for authenticated users
+  useEffect(() => {
+    if (!currentUser || currentUser.isGuest || !isSupabaseConfigured()) return;
+    const userId = currentUser.id;
+    let isMounted = true;
+
+    async function loadInitialCloudData() {
+      try {
+        const [cloudCards, cloudNotes, cloudProgress] = await Promise.all([
+          fetchVocabCardsFromCloud(userId),
+          fetchStudyNotesFromCloud(userId),
+          fetchUserProgressFromCloud(userId),
+        ]);
+
+        if (!isMounted) return;
+
+        if (cloudCards && cloudCards.length > 0) {
+          setVocabCards((local) => {
+            const map = new Map<string, VocabCard>();
+            for (const c of cloudCards) map.set(c.id, c);
+            for (const c of local) {
+              if (!map.has(c.id)) {
+                map.set(c.id, c);
+              }
+            }
+            const merged = Array.from(map.values());
+            void upsertVocabCardsToCloud(userId, merged);
+            return merged;
+          });
+        } else if (vocabCards.length > 0) {
+          void upsertVocabCardsToCloud(userId, vocabCards);
+        }
+
+        if (cloudNotes && cloudNotes.length > 0) {
+          setStudyNotes((local) => {
+            const map = new Map<string, StudyNote>();
+            for (const n of cloudNotes) map.set(n.id, n);
+            for (const n of local) {
+              if (!map.has(n.id)) {
+                map.set(n.id, n);
+              }
+            }
+            const merged = Array.from(map.values());
+            void upsertStudyNotesToCloud(userId, merged);
+            return merged;
+          });
+        } else if (studyNotes.length > 0) {
+          void upsertStudyNotesToCloud(userId, studyNotes);
+        }
+
+        if (cloudProgress) {
+          if (cloudProgress.selectedLevel) setSelectedLevel(cloudProgress.selectedLevel);
+          if (cloudProgress.readingHistory && cloudProgress.readingHistory.length > 0) {
+            setReadingHistory(cloudProgress.readingHistory);
+          }
+          if (cloudProgress.studyStreak) setStudyStreak(cloudProgress.studyStreak);
+          if (cloudProgress.dailyLogs && Object.keys(cloudProgress.dailyLogs).length > 0) {
+            setDailyLogs(cloudProgress.dailyLogs);
+          }
+          if (typeof cloudProgress.dailyWordGoal === 'number') {
+            setDailyWordGoal(cloudProgress.dailyWordGoal);
+          }
+          if (cloudProgress.readerPreferences) setPreferences(cloudProgress.readerPreferences);
+        } else {
+          void upsertUserProgressToCloud(userId, {
+            selectedLevel,
+            readingHistory,
+            studyStreak,
+            dailyLogs,
+            dailyWordGoal,
+            readerPreferences: preferences,
+          });
+        }
+      } catch (err) {
+        console.warn('[Qalam Supabase] Initial cloud load error:', err);
+      }
+    }
+
+    void loadInitialCloudData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser?.id]);
+
+  // Cloud auto-sync when cards change
+  const prevCardsRef = useRef(vocabCards);
+  useEffect(() => {
+    if (!currentUser || currentUser.isGuest || !isSupabaseConfigured()) return;
+    if (prevCardsRef.current !== vocabCards) {
+      prevCardsRef.current = vocabCards;
+      const timer = window.setTimeout(() => {
+        void upsertVocabCardsToCloud(currentUser.id, vocabCards);
+      }, 700);
+      return () => window.clearTimeout(timer);
+    }
+  }, [vocabCards, currentUser?.id]);
+
+  // Cloud auto-sync when notes change
+  const prevNotesRef = useRef(studyNotes);
+  useEffect(() => {
+    if (!currentUser || currentUser.isGuest || !isSupabaseConfigured()) return;
+    if (prevNotesRef.current !== studyNotes) {
+      prevNotesRef.current = studyNotes;
+      const timer = window.setTimeout(() => {
+        void upsertStudyNotesToCloud(currentUser.id, studyNotes);
+      }, 700);
+      return () => window.clearTimeout(timer);
+    }
+  }, [studyNotes, currentUser?.id]);
+
+  // Cloud auto-sync when learning progress changes
+  useEffect(() => {
+    if (!currentUser || currentUser.isGuest || !isSupabaseConfigured()) return;
+    const timer = window.setTimeout(() => {
+      void upsertUserProgressToCloud(currentUser.id, {
+        selectedLevel,
+        readingHistory,
+        studyStreak,
+        dailyLogs,
+        dailyWordGoal,
+        readerPreferences: preferences,
+      });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [
+    selectedLevel,
+    readingHistory,
+    studyStreak,
+    dailyLogs,
+    dailyWordGoal,
+    preferences,
+    currentUser?.id,
+  ]);
 
   // Role/Auth Access Control: only signed-in non-guest users can add/manage custom content
   const canAddContent = Boolean(currentUser && !currentUser.isGuest);
@@ -343,6 +508,12 @@ export default function App() {
     const map = new Map<string, VocabCard['status']>();
     for (const card of vocabCards) {
       map.set(card.normalizedKey, card.status);
+      const wordKey = normalizeArabicWord(card.word);
+      const tashkeelKey = normalizeArabicWord(card.wordWithTashkeel);
+      const standaloneKey = normalizeStandaloneArabicKey(card.wordWithTashkeel);
+      if (wordKey) map.set(wordKey, card.status);
+      if (tashkeelKey) map.set(tashkeelKey, card.status);
+      if (standaloneKey) map.set(standaloneKey, card.status);
     }
     return map;
   }, [vocabCards]);
@@ -424,6 +595,7 @@ export default function App() {
   };
 
   const handleOpenDifficultPractice = () => {
+    setActiveHeroSwitch('practice');
     setPracticeScopeRequest((prev) => ({ scope: 'hard', seq: prev.seq + 1 }));
     setActiveTab('vocabulary');
     setActiveNavSection('vocabulary');
@@ -432,6 +604,7 @@ export default function App() {
   };
 
   const handleSelectHome = () => {
+    setActiveHeroSwitch(null);
     setActiveTab('lessons');
     setActiveNavSection('home');
     setActiveLessonId(null);
@@ -440,6 +613,7 @@ export default function App() {
   };
 
   const handleSelectLevelsNav = () => {
+    setActiveHeroSwitch('levels');
     setActiveTab('lessons');
     setActiveNavSection('levels');
     setActiveLessonId(null);
@@ -542,6 +716,7 @@ export default function App() {
     setActiveNavSection('home');
     setIsAddLessonOpen(false);
     setIsNotesOpen(false);
+    setIsUserManagementOpen(false);
     setPublishNotice(null);
     setWordSelection(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -555,20 +730,20 @@ export default function App() {
   };
 
   const getCacheKey = (word: string, contextSentence: string, level: ProficiencyLevel) =>
-    `v3::${level}::${normalizeArabicWord(word)}::${contextSentence.slice(0, 80)}`;
+    `v3::${level}::${normalizeArabicWord(word)}::${stripTashkeel(contextSentence).replace(/\s+/g, ' ').trim().slice(0, 80)}`;
 
   const fetchWordAnalysis = async (selection: ActiveWordSelection): Promise<WordAnalysis> => {
     const targetLevel: ProficiencyLevel =
       selection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
     const cacheKey = getCacheKey(selection.word, selection.contextSentence, targetLevel);
 
-    // 1. Instant 0ms localStorage cache hit
+    // 1. Instant 0ms localStorage cache hit (ignoring any legacy fake placeholders)
     const cached = analysisCache[cacheKey];
-    if (cached) {
+    if (cached && !isFakePlaceholderTranslation(cached)) {
       return cached;
     }
 
-    // 2. Reuse in-flight prefetch request if user opened menu milliseconds earlier
+    // 2. Reuse in-flight request if already running
     const existingPromise = inFlightRequests.current.get(cacheKey);
     if (existingPromise) {
       return existingPromise;
@@ -585,7 +760,9 @@ export default function App() {
         setApiNotice(analysis.notice);
       }
 
-      setAnalysisCache((prev) => ({ ...prev, [cacheKey]: analysis }));
+      if (!isFakePlaceholderTranslation(analysis)) {
+        setAnalysisCache((prev) => ({ ...prev, [cacheKey]: analysis }));
+      }
       return analysis;
     })();
 
@@ -607,14 +784,10 @@ export default function App() {
       selection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
     const cacheKey = getCacheKey(selection.word, selection.contextSentence, targetLevel);
     const cached = analysisCache[cacheKey];
-    if (cached) {
+    if (cached && !isFakePlaceholderTranslation(cached)) {
       setWordAnalysis(cached);
     } else {
       setWordAnalysis(null);
-      // Speculative prefetch while user chooses Translate or Add to Vocabulary
-      void fetchWordAnalysis(selection).catch(() => {
-        // Fallback handled on action
-      });
     }
   };
 
@@ -632,7 +805,7 @@ export default function App() {
       targetLevel
     );
     const cached = analysisCache[cacheKey];
-    if (cached) {
+    if (cached && !isFakePlaceholderTranslation(cached)) {
       setWordAnalysis(cached);
       setAnalysisLoading(false);
       return;
@@ -642,15 +815,29 @@ export default function App() {
     try {
       const result = await fetchWordAnalysis(wordSelection);
       setWordAnalysis(result);
-    } catch {
-      const fallback = lookupFallbackWord(
+    } catch (err) {
+      console.error('[Qalam Translation] Failed to translate word:', err);
+      const curated = lookupFallbackWord(
         wordSelection.word,
         wordSelection.contextSentence,
         undefined,
         targetLevel
       );
-      setWordAnalysis(fallback);
-      setAnalysisCache((prev) => ({ ...prev, [cacheKey]: fallback }));
+      if (curated) {
+        const noticeMsg =
+          err instanceof Error && err.message
+            ? err.message
+            : 'Showing curated Arabic dictionary entry.';
+        setWordAnalysis({ ...curated, notice: noticeMsg });
+        setAnalysisError(null);
+      } else {
+        setWordAnalysis(null);
+        setAnalysisError(
+          err instanceof Error && err.message
+            ? err.message
+            : 'Unable to translate this word right now. Please try again.'
+        );
+      }
     } finally {
       setAnalysisLoading(false);
     }
@@ -659,7 +846,8 @@ export default function App() {
   const handleAddToVocabulary = () => {
     if (!wordSelection) return;
     recordStudyActivity();
-    const normalizedKey = normalizeArabicWord(wordSelection.word);
+    const rawNormalized = normalizeArabicWord(wordSelection.word);
+    const normalizedKey = normalizeStandaloneArabicKey(wordSelection.word) || rawNormalized;
     const sourceLevel: ProficiencyLevel =
       wordSelection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
     const cacheKey = getCacheKey(
@@ -668,10 +856,15 @@ export default function App() {
       sourceLevel
     );
 
-    if (vocabStatusMap.has(normalizedKey)) {
+    if (vocabStatusMap.has(normalizedKey) || vocabStatusMap.has(rawNormalized)) {
       setJustSaved(true);
       if (!wordAnalysis) {
-        const existing = vocabCards.find((c) => c.normalizedKey === normalizedKey);
+        const existing = vocabCards.find(
+          (c) =>
+            c.normalizedKey === normalizedKey ||
+            c.normalizedKey === rawNormalized ||
+            normalizeStandaloneArabicKey(c.wordWithTashkeel) === normalizedKey
+        );
         if (existing) {
           setWordAnalysis(existing);
         }
@@ -680,52 +873,104 @@ export default function App() {
       return;
     }
 
-    // Immediate local word saving using cached analysis or instant built-in lexicon baseline
-    const instantAnalysis =
-      analysisCache[cacheKey] ??
-      wordAnalysis ??
-      lookupFallbackWord(
-        wordSelection.word,
-        wordSelection.contextSentence,
-        undefined,
-        sourceLevel
-      );
+    const validCached =
+      analysisCache[cacheKey] && !isFakePlaceholderTranslation(analysisCache[cacheKey])
+        ? analysisCache[cacheKey]
+        : null;
+    const validCurrent =
+      wordAnalysis && !isFakePlaceholderTranslation(wordAnalysis) ? wordAnalysis : null;
+    const curatedBaseline = lookupFallbackWord(
+      wordSelection.word,
+      wordSelection.contextSentence,
+      undefined,
+      sourceLevel
+    );
+
+    const resolvedBaseline = validCached ?? validCurrent ?? curatedBaseline;
+    const standaloneRaw = normalizeStandaloneVocabWord(
+      resolvedBaseline?.wordWithTashkeel || wordSelection.word,
+      {
+        wordType: resolvedBaseline?.wordType,
+        partOfSpeech: resolvedBaseline?.partOfSpeech,
+      }
+    );
+    const standaloneWordAr = applySmartPartialTashkeel(
+      standaloneRaw || resolvedBaseline?.wordWithTashkeel || wordSelection.word
+    );
+    const standaloneKey = normalizeStandaloneArabicKey(standaloneWordAr) || normalizedKey;
+
+    const instantAnalysis: WordAnalysis = resolvedBaseline ?? {
+      word: stripTashkeel(standaloneWordAr) || stripTashkeel(wordSelection.word),
+      wordWithTashkeel: standaloneWordAr,
+      vocalizedWord: stripFinalIrabForSpeech(standaloneWordAr, {
+        wordType: 'اسم',
+        partOfSpeech: 'Vocabulary',
+      }),
+      partOfSpeech: 'Vocabulary',
+      wordType: 'اسم',
+      root: '',
+      transliteration: '',
+      englishMeaning: 'Translation pending — tap Translate or Edit to retry',
+      examples: [],
+      level: sourceLevel,
+    };
 
     const newCardId = `vocab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const newCard: VocabCard = {
       ...instantAnalysis,
       id: newCardId,
-      normalizedKey,
+      word: stripTashkeel(standaloneWordAr) || instantAnalysis.word,
+      wordWithTashkeel: standaloneWordAr,
+      normalizedKey: standaloneKey,
       lessonId: activeLesson?.id,
       lessonTitle: activeLesson?.titleEn,
       level: instantAnalysis.level ?? sourceLevel,
-      vocalizedWord: instantAnalysis.vocalizedWord,
+      vocalizedWord:
+        instantAnalysis.vocalizedWord ||
+        stripFinalIrabForSpeech(standaloneWordAr, {
+          wordType: instantAnalysis.wordType,
+          partOfSpeech: instantAnalysis.partOfSpeech,
+        }),
       status: 'needs_review',
       createdAt: Date.now(),
     };
 
     setVocabCards((prev) => [newCard, ...prev]);
-    setWordAnalysis(instantAnalysis);
+    setWordAnalysis({
+      ...instantAnalysis,
+      word: newCard.word,
+      wordWithTashkeel: newCard.wordWithTashkeel,
+      vocalizedWord: newCard.vocalizedWord,
+    });
     setAnalysisError(null);
     setSavingVocab(false);
     recordStudyActivity('added');
     setJustSaved(true);
     setPopoverMode('translation');
 
-    // Background AI enrichment: upgrades the saved card seamlessly if Gemini responds with richer contextual data
+    // Background AI enrichment: upgrades the saved card seamlessly if Gemini responds with real translation data
     if (instantAnalysis.source !== 'gemini' && instantAnalysis.source !== 'cache') {
       const capturedSelection = wordSelection;
       void fetchWordAnalysis(capturedSelection)
         .then((enriched) => {
           if (enriched.source === 'gemini') {
+            const enrichedStandaloneAr = applySmartPartialTashkeel(
+              normalizeStandaloneVocabWord(enriched.wordWithTashkeel, {
+                wordType: enriched.wordType,
+                partOfSpeech: enriched.partOfSpeech,
+              }) || enriched.wordWithTashkeel
+            );
             setVocabCards((prev) =>
               prev.map((card) =>
-                card.id === newCardId
+                card.id === newCardId && !card.hasCustomEdits
                   ? {
                       ...card,
                       ...enriched,
+                      word: stripTashkeel(enrichedStandaloneAr) || enriched.word,
+                      wordWithTashkeel: enrichedStandaloneAr,
                       id: card.id,
-                      normalizedKey: card.normalizedKey,
+                      normalizedKey:
+                        normalizeStandaloneArabicKey(enrichedStandaloneAr) || card.normalizedKey,
                       lessonId: card.lessonId,
                       lessonTitle: card.lessonTitle,
                       level: enriched.level ?? card.level,
@@ -736,12 +981,32 @@ export default function App() {
               )
             );
             setWordAnalysis((curr) =>
-              curr && normalizeArabicWord(curr.word) === normalizedKey ? enriched : curr
+              curr &&
+              (normalizeStandaloneArabicKey(curr.word) === standaloneKey ||
+                normalizeArabicWord(curr.word) === rawNormalized)
+                ? {
+                    ...enriched,
+                    word: stripTashkeel(enrichedStandaloneAr) || enriched.word,
+                    wordWithTashkeel: enrichedStandaloneAr,
+                  }
+                : curr
             );
           }
         })
-        .catch(() => {
-          // Local baseline card is already safely stored in localStorage
+        .catch((err) => {
+          console.error('[Qalam Translation] Background vocabulary enrichment failed:', err);
+          if (err instanceof Error && err.message && !curatedBaseline) {
+            setWordAnalysis((curr) =>
+              curr &&
+              (normalizeStandaloneArabicKey(curr.word) === standaloneKey ||
+                normalizeArabicWord(curr.word) === rawNormalized)
+                ? {
+                    ...curr,
+                    notice: `Saved to vocabulary locally. ${err.message}`,
+                  }
+                : curr
+            );
+          }
         });
     }
   };
@@ -778,6 +1043,54 @@ export default function App() {
             }
           : card
       )
+    );
+  };
+
+  const handleEditVocabCard = (updatedCard: VocabCard, previousCard: VocabCard) => {
+    // Invalidate cached TTS audio for both previous and updated word & example sentences
+    invalidateCachedArabicAudio(previousCard.wordWithTashkeel, 'word');
+    if (previousCard.vocalizedWord) {
+      invalidateCachedArabicAudio(previousCard.vocalizedWord, 'word');
+    }
+    invalidateCachedArabicAudio(updatedCard.wordWithTashkeel, 'word');
+    if (updatedCard.vocalizedWord) {
+      invalidateCachedArabicAudio(updatedCard.vocalizedWord, 'word');
+    }
+
+    for (const ex of previousCard.examples) {
+      invalidateCachedArabicAudio(ex.arabic);
+    }
+    for (const ex of updatedCard.examples) {
+      invalidateCachedArabicAudio(ex.arabic);
+    }
+
+    // Invalidate stale cached translations for previous/updated standalone word keys
+    const prevRawKey = normalizeArabicWord(previousCard.wordWithTashkeel);
+    const prevStandaloneKey = normalizeStandaloneArabicKey(previousCard.wordWithTashkeel);
+    const nextRawKey = normalizeArabicWord(updatedCard.wordWithTashkeel);
+    const nextStandaloneKey = normalizeStandaloneArabicKey(updatedCard.wordWithTashkeel);
+    setAnalysisCache((prev) => {
+      let changed = false;
+      const next: Record<string, WordAnalysis> = {};
+      for (const [k, val] of Object.entries(prev)) {
+        const valRaw = normalizeArabicWord(val.wordWithTashkeel || val.word);
+        const valStandalone = normalizeStandaloneArabicKey(val.wordWithTashkeel || val.word);
+        const matchesEdited =
+          valRaw === prevRawKey ||
+          valRaw === nextRawKey ||
+          valStandalone === prevStandaloneKey ||
+          valStandalone === nextStandaloneKey;
+        if (matchesEdited) {
+          changed = true;
+        } else {
+          next[k] = val;
+        }
+      }
+      return changed ? next : prev;
+    });
+
+    setVocabCards((prev) =>
+      prev.map((card) => (card.id === updatedCard.id ? updatedCard : card))
     );
   };
 
@@ -840,6 +1153,7 @@ export default function App() {
 
   const handleOpenNotes = useCallback(
     (explicitContext?: NoteContextTag) => {
+      setActiveHeroSwitch('notes');
       setNotesContext(explicitContext ?? getDefaultNoteContext());
       setIsNotesOpen(true);
     },
@@ -914,7 +1228,13 @@ export default function App() {
         canAddContent={canAddContent}
         onOpenAuth={handleOpenAuth}
         onOpenAddLesson={() => {
-          if (canAddContent) setIsAddLessonOpen(true);
+          if (canAddContent) {
+            setActiveHeroSwitch('addText');
+            setIsAddLessonOpen(true);
+          }
+        }}
+        onOpenUserManagement={() => {
+          if (isAdminUser(currentUser)) setIsUserManagementOpen(true);
         }}
         onLogout={handleLogout}
         notesCount={studyNotes.length}
@@ -1043,40 +1363,80 @@ export default function App() {
                       </p>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                    <div
+                      role="group"
+                      aria-label="Primary actions"
+                      className="flex flex-wrap items-center justify-center gap-3 pt-1 pb-1"
+                    >
                       <button
                         type="button"
+                        aria-pressed={activeHeroSwitch === 'levels'}
                         onClick={handleSelectLevelsNav}
-                        className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#D4A338] to-[#E8B948] px-5 py-2.5 text-xs sm:text-sm font-bold text-[#1F2718] hover:brightness-105 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+                        className={`qalam-switch-btn text-xs sm:text-sm font-bold ${
+                          activeHeroSwitch === 'levels' ? 'is-active' : ''
+                        }`}
                       >
                         <span>Explore Levels</span>
-                        <ArrowDown className="h-3.5 w-3.5 text-[#1F2718]" aria-hidden="true" />
+                        <ArrowDown
+                          className={`h-3.5 w-3.5 transition-colors duration-[180ms] ${
+                            activeHeroSwitch === 'levels' ? 'text-[#1F2718]' : 'text-[#FACC15]'
+                          }`}
+                          aria-hidden="true"
+                        />
                       </button>
 
                       <button
                         type="button"
+                        aria-pressed={activeHeroSwitch === 'practice'}
                         onClick={handleOpenDifficultPractice}
-                        className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-[#D4A338]/50 bg-[#1D2716]/85 px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#FAFBF8] hover:bg-[#1D2716] hover:border-[#E8B948]/80 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+                        className={`qalam-switch-btn text-xs sm:text-sm font-semibold ${
+                          activeHeroSwitch === 'practice' ? 'is-active font-bold' : ''
+                        }`}
                       >
-                        <Flame className="h-4 w-4 shrink-0 text-[#E8B948]" aria-hidden="true" />
+                        <Flame
+                          className={`h-4 w-4 shrink-0 transition-colors duration-[180ms] ${
+                            activeHeroSwitch === 'practice' ? 'text-[#2D3B22]' : 'text-[#FACC15]'
+                          }`}
+                          aria-hidden="true"
+                        />
                         <span>Practice Cards</span>
                         {difficultCount > 0 && (
-                          <span className="font-mono text-xs font-bold tabular-nums text-[#E8B948]">
-                            ({difficultCount})
+                          <span
+                            className={`rounded-md px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums transition-colors duration-[180ms] ${
+                              activeHeroSwitch === 'practice'
+                                ? 'bg-[#2D3B22]/15 text-[#1F2718]'
+                                : 'bg-[#182111]/60 text-[#FACC15]'
+                            }`}
+                          >
+                            {difficultCount}
                           </span>
                         )}
                       </button>
 
                       <button
                         type="button"
+                        aria-pressed={activeHeroSwitch === 'notes'}
                         onClick={() => handleOpenNotes()}
-                        className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-xs sm:text-sm font-semibold text-[#FAFBF8] hover:bg-white/20 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+                        className={`qalam-switch-btn text-xs sm:text-sm font-semibold ${
+                          activeHeroSwitch === 'notes' ? 'is-active font-bold' : ''
+                        }`}
                       >
-                        <NotebookPen className="h-4 w-4 shrink-0 text-[#E8B948]" aria-hidden="true" />
-                        <span className="font-arabic-cairo">ملاحظاتي · My Notes</span>
+                        <NotebookPen
+                          className={`h-4 w-4 shrink-0 transition-colors duration-[180ms] ${
+                            activeHeroSwitch === 'notes' ? 'text-[#2D3B22]' : 'text-[#FACC15]'
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span className="font-arabic-cairo">My Notes · ملاحظاتي</span>
                         {studyNotes.length > 0 && (
-                          <span className="font-mono text-xs font-bold tabular-nums text-[#E8B948]">
-                            ({studyNotes.length})
+                          <span
+                            className={`rounded-md px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums transition-colors duration-[180ms] ${
+                              activeHeroSwitch === 'notes'
+                                ? 'bg-[#2D3B22]/15 text-[#1F2718]'
+                                : 'bg-[#182111]/60 text-[#FACC15]'
+                            }`}
+                          >
+                            {studyNotes.length}
                           </span>
                         )}
                       </button>
@@ -1084,10 +1444,21 @@ export default function App() {
                       {canAddContent && (
                         <button
                           type="button"
-                          onClick={() => setIsAddLessonOpen(true)}
-                          className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-white/20 bg-white/12 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-white/20 shadow-sm transition-all active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+                          aria-pressed={activeHeroSwitch === 'addText'}
+                          onClick={() => {
+                            setActiveHeroSwitch('addText');
+                            setIsAddLessonOpen(true);
+                          }}
+                          className={`qalam-switch-btn text-xs sm:text-sm font-semibold ${
+                            activeHeroSwitch === 'addText' ? 'is-active font-bold' : ''
+                          }`}
                         >
-                          <Plus className="h-4 w-4 shrink-0 text-[#E8B948]" aria-hidden="true" />
+                          <Plus
+                            className={`h-4 w-4 shrink-0 transition-colors duration-[180ms] ${
+                              activeHeroSwitch === 'addText' ? 'text-[#2D3B22]' : 'text-[#FACC15]'
+                            }`}
+                            aria-hidden="true"
+                          />
                           <span className="font-arabic-cairo">إضافة نص جديد (Add New Text)</span>
                         </button>
                       )}
@@ -1634,6 +2005,7 @@ export default function App() {
               onUpdateStatus={handleUpdateVocabStatus}
               onToggleDifficult={handleToggleDifficultCard}
               onRateSrs={handleRateVocabCard}
+              onEditCard={handleEditVocabCard}
               onDeleteCard={handleDeleteVocabCard}
               onGoToLessons={() => handleSelectTab('lessons')}
               onRecordReview={() => recordStudyActivity('reviewed')}
@@ -1721,6 +2093,21 @@ export default function App() {
               setWordSelection(null);
             }}
           />
+
+          {isAdminUser(currentUser) && (
+            <UserManagementModal
+              isOpen={isUserManagementOpen}
+              currentUser={currentUser}
+              vocabCards={vocabCards}
+              analysisCache={analysisCache}
+              onVocabRepaired={setVocabCards}
+              onAnalysisCacheRepaired={setAnalysisCache}
+              onClose={() => setIsUserManagementOpen(false)}
+              onCurrentUserSynced={(updated) => {
+                if (updated) setCurrentUser(updated);
+              }}
+            />
+          )}
 
           <NotesDrawer
             isOpen={isNotesOpen}

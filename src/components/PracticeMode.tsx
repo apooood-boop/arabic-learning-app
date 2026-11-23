@@ -29,6 +29,7 @@ interface PracticeModeProps {
   scopeRequestSeq?: number;
   onUpdateStatus: (id: string, status: PracticeStatus) => void;
   onToggleDifficult?: (id: string) => void;
+  onEditCard?: (card: VocabCard) => void;
   onRateSrs: (id: string, rating: SrsRating) => void;
   onGoToLessons: () => void;
   onGoToVocabulary: () => void;
@@ -88,6 +89,7 @@ export function PracticeMode({
   scopeRequestSeq = 0,
   onUpdateStatus,
   onToggleDifficult,
+  onEditCard,
   onRateSrs,
   onGoToLessons,
   onGoToVocabulary,
@@ -208,6 +210,9 @@ export function PracticeMode({
         setIsFlipped((prev) => !prev);
       } else if (e.key === 'l' || e.key === 'L') {
         unlockArabicAudioContext();
+        if (wordAudioState === 'loading') {
+          return;
+        }
         if (wordAudioState !== 'idle') {
           stopArabicSpeech();
           setWordAudioState('idle');
@@ -215,14 +220,15 @@ export function PracticeMode({
           speakArabic(currentCard.wordWithTashkeel, {
             rate: speechRate,
             mode: 'word',
-            vocalizedText:
-              currentCard.vocalizedWord ||
-              getLexiconSpeechText(
-                currentCard.word,
-                currentCard.wordWithTashkeel,
-                currentCard.wordType,
-                currentCard.partOfSpeech
-              ),
+            vocalizedText: currentCard.hasCustomEdits
+              ? currentCard.wordWithTashkeel
+              : currentCard.vocalizedWord ||
+                getLexiconSpeechText(
+                  currentCard.word,
+                  currentCard.wordWithTashkeel,
+                  currentCard.wordType,
+                  currentCard.partOfSpeech
+                ),
             meaningHint: currentCard.englishMeaning,
             wordType: currentCard.wordType,
             partOfSpeech: currentCard.partOfSpeech,
@@ -633,6 +639,7 @@ export function PracticeMode({
                 controlledFlipped={isFlipped}
                 onFlipChange={setIsFlipped}
                 onToggleDifficult={onToggleDifficult}
+                onEdit={onEditCard}
               />
 
               {/* Spaced Repetition Grading Controls */}
@@ -656,6 +663,9 @@ export function PracticeMode({
                         type="button"
                         onClick={() => {
                           unlockArabicAudioContext();
+                          if (wordAudioState === 'loading') {
+                            return;
+                          }
                           if (wordAudioState !== 'idle') {
                             stopArabicSpeech();
                             setWordAudioState('idle');
@@ -663,14 +673,15 @@ export function PracticeMode({
                             speakArabic(currentCard.wordWithTashkeel, {
                               rate: speechRate,
                               mode: 'word',
-                              vocalizedText:
-                                currentCard.vocalizedWord ||
-                                getLexiconSpeechText(
-                                  currentCard.word,
-                                  currentCard.wordWithTashkeel,
-                                  currentCard.wordType,
-                                  currentCard.partOfSpeech
-                                ),
+                              vocalizedText: currentCard.hasCustomEdits
+                                ? currentCard.wordWithTashkeel
+                                : currentCard.vocalizedWord ||
+                                  getLexiconSpeechText(
+                                    currentCard.word,
+                                    currentCard.wordWithTashkeel,
+                                    currentCard.wordType,
+                                    currentCard.partOfSpeech
+                                  ),
                               meaningHint: currentCard.englishMeaning,
                               wordType: currentCard.wordType,
                               partOfSpeech: currentCard.partOfSpeech,

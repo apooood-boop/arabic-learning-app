@@ -24,6 +24,7 @@ import {
 import {
   applySmartPartialTashkeel,
   LEVEL_LABELS,
+  normalizeStandaloneVocabWord,
   speakArabic,
   stopArabicSpeech,
   stripTashkeel,
@@ -54,8 +55,18 @@ function buildClientFallbackConversation(
   cards: VocabCard[]
 ): GeneratedConversation {
   const words = cards.slice(0, 6);
-  const w1 = applySmartPartialTashkeel(words[0]?.wordWithTashkeel || 'القَهْوَةُ');
-  const w2 = applySmartPartialTashkeel(words[1]?.wordWithTashkeel || 'السَّعَادَةُ');
+  const formatFlexWord = (w?: VocabCard, fallbackWord = 'القَهْوَة'): string => {
+    if (!w) return fallbackWord;
+    if (w.hasCustomEdits) return w.wordWithTashkeel;
+    return applySmartPartialTashkeel(
+      normalizeStandaloneVocabWord(w.wordWithTashkeel, {
+        wordType: w.wordType,
+        partOfSpeech: w.partOfSpeech,
+      }) || w.wordWithTashkeel
+    );
+  };
+  const w1 = formatFlexWord(words[0], 'القَهْوَة');
+  const w2 = formatFlexWord(words[1], 'السَّعَادَة');
 
   return {
     scenarioId: customTopic || scenarioId,
@@ -66,7 +77,7 @@ function buildClientFallbackConversation(
     settingAr: 'تَدَرَّبْ عَلَى النُّطْقِ وَاسْتِخْدَامِ مُفْرَدَاتِكَ الجَدِيدَةِ فِي حِوَارٍ طَبِيعِيٍّ.',
     settingEn: 'Practice speaking and listening with your newly saved Arabic vocabulary.',
     level,
-    targetWords: words.length > 0 ? words.map((w) => applySmartPartialTashkeel(w.wordWithTashkeel)) : [w1, w2],
+    targetWords: words.length > 0 ? words.map((w) => formatFlexWord(w)) : [w1, w2],
     turns: [
       {
         id: 'fb-t1',
@@ -83,9 +94,9 @@ function buildClientFallbackConversation(
         speakerAr: 'أَنْتَ',
         speakerEn: 'You',
         role: 'learner',
-        arabic: applySmartPartialTashkeel(`بِخَيْرٍ وَالحَمْدُ لِلَّهِ! أَتَدَرَّبُ اليَوْمَ عَلَى اسْتِخْدَامِ كَلِمَةِ ${w1}.`),
-        transliteration: 'bi-khayrin wa-l-ḥamdu lillāh! atadarrabu al-yawm ʿalā istikhdām hādhihi l-kalima.',
-        english: `Doing well, thank you! Today I am practicing using the word "${w1}".`,
+        arabic: applySmartPartialTashkeel(`بِخَيْرٍ وَالحَمْدُ لِلَّهِ! أَتَدَرَّبُ اليَوْمَ عَلَى اسْتِخْدَامِ «${w1}» فِي الحِوَارِ.`),
+        transliteration: 'bi-khayrin wa-l-ḥamdu lillāh! atadarrabu al-yawm ʿalā istikhdām hādhihi l-mufrada fi l-ḥiwār.',
+        english: `Doing well, thank you! Today I am practicing using "${w1}" in conversation.`,
         usedWords: [w1],
       },
       {
@@ -93,9 +104,9 @@ function buildClientFallbackConversation(
         speakerAr: 'لَيْلَى',
         speakerEn: 'Layla',
         role: 'partner',
-        arabic: applySmartPartialTashkeel(`مُمْتَازٌ! هَلْ تَشْعُرُ بِـ${w2} عِنْدَمَا تَقْرَأُ بِالعَرَبِيَّةِ؟`),
-        transliteration: 'mumtāz! hal tashʿuru bi-hādha ʿindamā taqraʾu bi-l-ʿarabiyya?',
-        english: `Excellent! Do you feel "${w2}" when you read in Arabic?`,
+        arabic: applySmartPartialTashkeel(`مُمْتَازٌ! مَا أَجْمَلَ تَوْظِيفَ «${w2}» فِي سِيَاقٍ عَرَبِيٍّ طَبِيعِيٍّ اليَوْمَ!`),
+        transliteration: 'mumtāz! mā ajmala tawẓīf hādhihi l-kalima fī siyāq ʿarabī ṭabīʿī al-yawm!',
+        english: `Excellent! How great it is to use "${w2}" in a natural Arabic context today!`,
         usedWords: [w2],
       },
       {
@@ -112,11 +123,16 @@ function buildClientFallbackConversation(
     practiceSentences: (words.length > 0
       ? words.slice(0, 4)
       : [
-          { wordWithTashkeel: 'القَهْوَةُ', englishMeaning: 'the coffee' },
-          { wordWithTashkeel: 'السَّعَادَةُ', englishMeaning: 'happiness' },
+          { wordWithTashkeel: 'القَهْوَة', englishMeaning: 'the coffee' },
+          { wordWithTashkeel: 'السَّعَادَة', englishMeaning: 'happiness' },
         ]
     ).map((w, i) => {
-      const ar = applySmartPartialTashkeel(w.wordWithTashkeel);
+      const ar =
+        'hasCustomEdits' in w && w.hasCustomEdits
+          ? w.wordWithTashkeel
+          : applySmartPartialTashkeel(
+              normalizeStandaloneVocabWord(w.wordWithTashkeel) || w.wordWithTashkeel
+            );
       return {
         id: `fb-ps-${i + 1}`,
         arabic: applySmartPartialTashkeel(`أَسْتَخْدِمُ كَلِمَةَ «${ar}» بِثِقَةٍ فِي الحِوَارِ.`),
@@ -188,6 +204,9 @@ export function ConversationView({
 
   const handleSpeakItem = (id: string, arabicText: string) => {
     unlockArabicAudioContext();
+    if (audioPhase === 'loading') {
+      return;
+    }
     if (activeAudioId === id && !playingAll) {
       stopAllAudio();
       return;

@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   Loader2,
   NotebookPen,
+  Pencil,
   Play,
   RotateCw,
   Search,
@@ -33,6 +34,7 @@ import {
   unlockArabicAudioContext,
 } from '../utils/arabic';
 import { exportVocabularyAsCsv, exportVocabularyAsJson } from '../utils/exportVocab';
+import { EditVocabCardModal } from './EditVocabCardModal';
 import { Flashcard3D } from './Flashcard3D';
 import { PracticeMode, PracticeScope } from './PracticeMode';
 import { QuizMode, SpeedMatchGame } from './VocabGames';
@@ -49,6 +51,7 @@ interface VocabularyViewProps {
   onUpdateStatus: (id: string, status: PracticeStatus) => void;
   onToggleDifficult?: (id: string) => void;
   onRateSrs?: (id: string, rating: SrsRating) => void;
+  onEditCard?: (updatedCard: VocabCard, previousCard: VocabCard) => void;
   onDeleteCard: (id: string) => void;
   onGoToLessons: () => void;
   onRecordReview: () => void;
@@ -65,6 +68,7 @@ export function VocabularyView({
   onUpdateStatus,
   onToggleDifficult,
   onRateSrs,
+  onEditCard,
   onDeleteCard,
   onGoToLessons,
   onRecordReview,
@@ -81,6 +85,7 @@ export function VocabularyView({
   const [query, setQuery] = useState('');
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exportedFormat, setExportedFormat] = useState<'csv' | 'json' | null>(null);
+  const [editingCard, setEditingCard] = useState<VocabCard | null>(null);
 
   // Compact Airy Grid: track expanded example drawer & audio loading/playing per card
   const [expandedGridCardId, setExpandedGridCardId] = useState<string | null>(null);
@@ -213,6 +218,9 @@ export function VocabularyView({
 
   const handlePlayGridWord = (card: VocabCard) => {
     unlockArabicAudioContext();
+    if (gridAudioState?.phase === 'loading') {
+      return;
+    }
     if (gridAudioState?.cardId === card.id) {
       stopArabicSpeech();
       setGridAudioState(null);
@@ -224,9 +232,10 @@ export function VocabularyView({
       card.wordType,
       card.root
     );
-    const vocalizedText =
-      card.vocalizedWord ||
-      getLexiconSpeechText(card.word, card.wordWithTashkeel, wordType, card.partOfSpeech);
+    const vocalizedText = card.hasCustomEdits
+      ? card.wordWithTashkeel
+      : card.vocalizedWord ||
+        getLexiconSpeechText(card.word, card.wordWithTashkeel, wordType, card.partOfSpeech);
 
     speakArabic(card.wordWithTashkeel, {
       rate: speechRate,
@@ -245,6 +254,9 @@ export function VocabularyView({
 
   const handlePlayGridExample = (card: VocabCard, arabicSentence: string) => {
     unlockArabicAudioContext();
+    if (gridAudioState?.phase === 'loading') {
+      return;
+    }
     const audioKey = `${card.id}::ex`;
     if (gridAudioState?.cardId === audioKey) {
       stopArabicSpeech();
@@ -716,7 +728,9 @@ export function VocabularyView({
                             lang="ar"
                             className="font-arabic-scheherazade text-4xl font-bold text-[#1F2718] leading-[1.75]"
                           >
-                            {applySmartPartialTashkeel(card.wordWithTashkeel)}
+                            {card.hasCustomEdits
+                              ? card.wordWithTashkeel
+                              : applySmartPartialTashkeel(card.wordWithTashkeel)}
                           </p>
                           <p className="font-mono text-[11px] text-[#5A6552]">
                             {card.transliteration}
@@ -760,7 +774,9 @@ export function VocabularyView({
                                 lang="ar"
                                 className="font-arabic-scheherazade flex-1 text-lg text-[#1F2718] leading-[1.9] text-right"
                               >
-                                {applySmartPartialTashkeel(card.examples[0].arabic)}
+                                {card.hasCustomEdits
+                                  ? card.examples[0].arabic
+                                  : applySmartPartialTashkeel(card.examples[0].arabic)}
                               </p>
                             </div>
                             <p className="text-xs text-[#5A6552] leading-relaxed">
@@ -805,6 +821,20 @@ export function VocabularyView({
                           </div>
 
                           <div className="flex items-center gap-1">
+                            {onEditCard && (
+                              <button
+                                type="button"
+                                onClick={() => setEditingCard(card)}
+                                title="Edit Arabic word & diacritics"
+                                aria-label={`تعديل / Edit ${card.wordWithTashkeel}`}
+                                className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-semibold text-[#5A6552] hover:bg-[#EEF2E9] hover:text-[#2D3B22] transition-colors cursor-pointer"
+                              >
+                                <Pencil className="h-3 w-3 text-[#9A6F14]" aria-hidden="true" />
+                                <span className="font-arabic-cairo">تعديل</span>
+                                <span aria-hidden="true" className="text-[#DCE5D3]">/</span>
+                                <span>Edit</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => {
@@ -882,6 +912,7 @@ export function VocabularyView({
                         onFlipChange={setFocusFlipped}
                         onUpdateStatus={onUpdateStatus}
                         onToggleDifficult={onToggleDifficult}
+                        onEdit={onEditCard ? (c) => setEditingCard(c) : undefined}
                         onDelete={onDeleteCard}
                       />
                     </div>
@@ -911,7 +942,9 @@ export function VocabularyView({
                                   : 'border-[#DCE5D3] bg-white text-[#1F2718] hover:border-[#D4A338] hover:bg-[#FBF3DC]/60'
                               }`}
                             >
-                              {applySmartPartialTashkeel(c.wordWithTashkeel)}
+                              {c.hasCustomEdits
+                                ? c.wordWithTashkeel
+                                : applySmartPartialTashkeel(c.wordWithTashkeel)}
                             </button>
                           );
                         })}
@@ -931,6 +964,7 @@ export function VocabularyView({
               scopeRequestSeq={scopeRequestSeq}
               onUpdateStatus={onUpdateStatus}
               onToggleDifficult={onToggleDifficult}
+              onEditCard={onEditCard ? (c) => setEditingCard(c) : undefined}
               onRateSrs={onRateSrs ?? (() => {})}
               onGoToLessons={onGoToLessons}
               onGoToVocabulary={() => setStudyMode('cards')}
@@ -959,6 +993,18 @@ export function VocabularyView({
             />
           )}
         </>
+      )}
+
+      {editingCard && onEditCard && (
+        <EditVocabCardModal
+          card={editingCard}
+          speechRate={speechRate}
+          onClose={() => setEditingCard(null)}
+          onSave={(updatedCard, previousCard) => {
+            onEditCard(updatedCard, previousCard);
+            setEditingCard(null);
+          }}
+        />
       )}
     </section>
   );

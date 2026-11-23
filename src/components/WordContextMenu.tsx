@@ -121,6 +121,9 @@ export function WordContextMenu({
     unlockArabicAudioContext();
     setAudioError(null);
 
+    if (audioPhase === 'loading') {
+      return;
+    }
     if (speakingTarget === target) {
       stopArabicSpeech();
       setSpeakingTarget(null);
@@ -352,11 +355,21 @@ export function WordContextMenu({
               </div>
             ) : analysis ? (
               <>
+                {analysis.notice && (
+                  <p className="rounded-lg border border-amber-200 bg-[#FBF3DC]/70 px-3 py-1.5 text-[11px] font-medium text-[#7A560B]">
+                    {analysis.notice}
+                  </p>
+                )}
+
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-[#5A6552]">
                     <span className="font-semibold text-[#2D3B22]">{analysis.partOfSpeech}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="font-mono">{analysis.transliteration}</span>
+                    {analysis.transliteration && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono">{analysis.transliteration}</span>
+                      </>
+                    )}
                   </div>
 
                   <p className="text-base font-bold text-[#1F2718] leading-snug">

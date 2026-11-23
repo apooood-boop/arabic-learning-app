@@ -117,7 +117,7 @@ app.post('/api/word/analyze', async (req, res) => {
     return res.json({ ...cached, source: 'cache' });
   }
 
-  // 2. If GEMINI_API_KEY is missing, return rich built-in lexicon cleanly
+  // 2. If GEMINI_API_KEY is missing, return curated built-in lexicon entry if available or 503 error
   const apiKey = getConfiguredApiKey();
   if (!apiKey) {
     const fallback = lookupFallbackWord(
@@ -126,8 +126,13 @@ app.post('/api/word/analyze', async (req, res) => {
       'Using built-in Arabic lexicon mode for instant translation.',
       targetLevel
     );
-    setServerCache(cacheKey, fallback);
-    return res.json(fallback);
+    if (fallback) {
+      setServerCache(cacheKey, fallback);
+      return res.json(fallback);
+    }
+    return res.status(503).json({
+      error: 'Translation unavailable: Gemini API key is not configured.',
+    });
   }
 
   try {
@@ -273,30 +278,26 @@ Return strict JSON with:
       message.includes('403');
 
     const friendlyNotice = isInvalidKey
-      ? 'Showing built-in Arabic lexicon fallback.'
+      ? 'Gemini API key was rejected.'
       : message === 'TIMEOUT_UPSTREAM'
-        ? 'Showing fast built-in lexicon fallback.'
-        : 'Showing fast built-in lexicon fallback.';
+        ? 'Translation request timed out.'
+        : 'Gemini translation request failed.';
 
     const hasExact = Boolean(findExactLexiconMatch(trimmedWord));
-    if (hasExact || !isInvalidKey) {
+    if (hasExact) {
       const fallback = lookupFallbackWord(
         trimmedWord,
         trimmedContext,
-        friendlyNotice,
+        `${friendlyNotice} Showing curated dictionary entry.`,
         targetLevel
       );
-      return res.json(fallback);
+      if (fallback) {
+        return res.json(fallback);
+      }
     }
 
-    return res.status(401).json({
-      error: friendlyNotice,
-      fallback: lookupFallbackWord(
-        trimmedWord,
-        trimmedContext,
-        friendlyNotice,
-        targetLevel
-      ),
+    return res.status(isInvalidKey ? 401 : 502).json({
+      error: `${friendlyNotice} Please try again.`,
     });
   }
 });
@@ -1447,15 +1448,19 @@ app.get('/api/tts', async (req, res) => {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[TTS Server] Gemini TTS request failed:', msg);
-      if (isGeminiQuotaError(msg)) {
+      if (/401|403|UNAUTHENTICATED|API_KEY_SERVICE_BLOCKED|API keys are not supported/i.test(msg)) {
+        geminiTtsCooldownUntil = Date.now() + 24 * 3600 * 1000;
+        console.info(
+          '[TTS Server] Gemini TTS model requires OAuth token (API keys not supported for audio); using Google TTS audio stream.'
+        );
+      } else if (isGeminiQuotaError(msg)) {
         const cooldownMs = extractQuotaCooldownMs(msg);
         geminiTtsCooldownUntil = Date.now() + cooldownMs;
         console.info(
           `[TTS Server] Gemini TTS daily quota reached; using Google TTS audio stream for ${Math.round(cooldownMs / 60000)}m.`
         );
       } else {
-        console.info('[TTS Server] Gemini TTS unavailable, switching to Google TTS audio stream.');
+        console.info('[TTS Server] Gemini TTS unavailable, switching to Google TTS audio stream:', msg);
       }
     }
   }
@@ -2097,6 +2102,40 @@ Requirements:
       err instanceof Error ? err.message : err
     );
     return res.json(buildFallbackConversation('Generated using built-in conversation scenario.'));
+  }
+});
+
+// Secure Server-Side Gemini Proxy Route for all client AI calls
+app.post('/api/gemini/generateContent', async (req, res) => {
+  const { model, payload } = req.body as { model?: string; payload?: unknown };
+  const apiKey = getConfiguredApiKey();
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Server Gemini API key not configured.' });
+  }
+
+  const modelName = model || 'gemini-3.1-flash-lite';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+
+  try {
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify(payload || {}),
+    });
+
+    const errorBody = await upstream.text().catch(() => '');
+    if (!upstream.ok) {
+      return res.status(upstream.status).send(errorBody);
+    }
+
+    res.setHeader('Content-Type', 'application/json');
+    return res.send(errorBody);
+  } catch (err) {
+    console.error('[Gemini Proxy Server] Error proxying generateContent:', err);
+    return res.status(502).json({ error: 'Failed to contact Gemini API from server.' });
   }
 });
 

@@ -2,6 +2,8 @@ import type { ArabicFontStyle, ProficiencyLevel, TranscriptSegment } from '../ty
 import {
   fetchGeminiGenerateContent,
   getClientGeminiApiKey as getSharedClientGeminiApiKey,
+  notifyGeminiQuotaNotice,
+  parseGeminiQuotaInfo,
 } from './geminiAuth.ts';
 
 const TASHKEEL_REGEX = /[\u064B-\u065F\u0670\u06D6-\u06ED]/g;
@@ -306,6 +308,29 @@ export function normalizeArabicWord(word: string): string {
     .replace(/[أإآ]/g, 'ا')
     .replace(/ى/g, 'ي')
     .trim();
+}
+
+export function normalizeStandaloneArabicKey(word: string): string {
+  let cleaned = word
+    .replace(/\u0640/g, '')
+    .replace(PUNCTUATION_EDGE_REGEX, '')
+    .trim();
+
+  // Strip accusative tanween fath + trailing Alef seat (e.g. كِتَابًا -> كِتَاب) unless inherent adverb
+  const bareNoMarks = stripTashkeel(cleaned);
+  if (
+    !new Set([
+      'مبكرا', 'جدا', 'شكرا', 'دائما', 'احيانا', 'أحيانا', 'صباحا', 'مساء', 'ايضا', 'أيضا',
+      'معا', 'كثيرا', 'قليلا', 'سريعا', 'اهلا', 'أهلا', 'مرحبا', 'فعلا', 'حقا', 'طبعا',
+      'ابدا', 'أبدا', 'غدا', 'تماما', 'عادة', 'فجأة', 'حديثا', 'قديما', 'مباشرة',
+    ]).has(bareNoMarks) &&
+    cleaned.length >= 4 &&
+    /\u064B[\u064E-\u0652\u0651]*[اأى]$/.test(cleaned)
+  ) {
+    cleaned = cleaned.replace(/\u064B([\u064E-\u0652\u0651]*)[اأى]$/, '$1');
+  }
+
+  return normalizeArabicWord(cleaned);
 }
 
 export function cleanWordEdgePunctuation(token: string): {
@@ -797,6 +822,119 @@ export function sanitizeArabicForSpeech(text: string): string {
     .trim();
 }
 
+/**
+ * Normalizes an Arabic word extracted from reading context into a clean standalone
+ * dictionary/vocabulary entry by removing sentence-bound grammatical case endings (الإعراب)
+ * while preserving internal vocalization, Shaddah, fixed-vowel particles, and adverbs.
+ */
+export function normalizeStandaloneVocabWord(
+  word: string,
+  meta?: { wordType?: string; partOfSpeech?: string }
+): string {
+  const cleaned = word
+    .replace(/\u0640/g, '')
+    .replace(PUNCTUATION_EDGE_REGEX, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return '';
+
+  const tokens = cleaned.split(' ').filter(Boolean);
+  if (tokens.length === 0) return '';
+
+  const normalizeSingleStandaloneToken = (
+    token: string,
+    tokenMeta?: { wordType?: string; partOfSpeech?: string }
+  ): string => {
+    const bare = stripTashkeel(token);
+    if (!bare) return token;
+
+    if (FIXED_FINAL_VOWEL_WORDS.has(bare)) {
+      return token;
+    }
+
+    const isAdverb =
+      tokenMeta?.wordType === 'ظرف' ||
+      Boolean(tokenMeta?.partOfSpeech?.toLowerCase().includes('adverb')) ||
+      ADVERB_TANWEEN_WORDS.has(bare);
+
+    if (isAdverb && ADVERB_TANWEEN_WORDS.has(bare)) {
+      return token;
+    }
+
+    const units: Array<{ char: string; marks: string; isArabicLetter: boolean }> = [];
+    for (const ch of token) {
+      if (COMBINING_MARK_REGEX.test(ch) && units.length > 0) {
+        units[units.length - 1].marks += ch;
+      } else {
+        units.push({
+          char: ch,
+          marks: '',
+          isArabicLetter: ARABIC_LETTER_REGEX.test(ch),
+        });
+      }
+    }
+
+    const letterIndices: number[] = [];
+    units.forEach((u, idx) => {
+      if (u.isArabicLetter) letterIndices.push(idx);
+    });
+    if (letterIndices.length === 0) return token;
+
+    const lastIdx = letterIndices[letterIndices.length - 1];
+    const prevIdx = letterIndices.length >= 2 ? letterIndices[letterIndices.length - 2] : -1;
+    const lastUnit = units[lastIdx];
+
+    // Strip accusative tanween fath + trailing Alef / Alef Maqsura seat (e.g. كِتَابًا -> كِتَاب)
+    const hasTrailingTanwinSeat =
+      prevIdx >= 0 &&
+      (lastUnit.char === 'ا' || lastUnit.char === 'ى') &&
+      (units[prevIdx].marks.includes('\u064B') || lastUnit.marks.includes('\u064B'));
+
+    if (hasTrailingTanwinSeat) {
+      units[prevIdx].marks = [...units[prevIdx].marks].filter((m) => m !== '\u064B').join('');
+      lastUnit.marks = [...lastUnit.marks].filter((m) => m !== '\u064B').join('');
+      if (isAdverb) {
+        return units.map((u) => u.char + u.marks).join('');
+      }
+      return units
+        .slice(0, lastIdx)
+        .map((u) => u.char + u.marks)
+        .join('');
+    }
+
+    // Preserve past-tense 3ms verb citation fatha (e.g. كَتَبَ، ذَهَبَ) when tagged as verb
+    const isVerb =
+      tokenMeta?.wordType === 'فعل' ||
+      Boolean(tokenMeta?.partOfSpeech?.toLowerCase().includes('verb'));
+    const isPastCitationFatha =
+      isVerb &&
+      lastUnit.marks.includes('\u064E') &&
+      !lastUnit.marks.includes('\u064B') &&
+      !/^[يتنأ]/.test(bare);
+
+    if (isPastCitationFatha) {
+      return token;
+    }
+
+    // Strip context-bound case vowels & tanween (-a, -u, -i, -an, -un, -in) while preserving Shaddah/Sukun
+    lastUnit.marks = [...lastUnit.marks]
+      .filter((m) => !ARABIC_CASE_AND_TANWEEN_MARKS.has(m))
+      .join('');
+
+    return units.map((u) => u.char + u.marks).join('');
+  };
+
+  return tokens
+    .map((t, idx) =>
+      idx === tokens.length - 1
+        ? normalizeSingleStandaloneToken(t, meta)
+        : normalizeSingleStandaloneToken(t)
+    )
+    .join(' ')
+    .trim();
+}
+
 export interface ExpressiveProsody {
   rateMultiplier: number;
   pitch: number;
@@ -885,6 +1023,7 @@ let cachedVoices: SpeechSynthesisVoice[] = [];
 let activeUtterance: SpeechSynthesisUtterance | null = null;
 let activeAudioElement: HTMLAudioElement | null = null;
 let activeObjectUrl: string | null = null;
+let activeObjectUrlIsCached = false;
 let activeBufferSource: AudioBufferSourceNode | null = null;
 let activeFetchController: AbortController | null = null;
 let activeBoundaryRaf: number | null = null;
@@ -893,17 +1032,333 @@ let audioContextUnlocked = false;
 let pendingSpeakTimer: number | null = null;
 let startWatchdogTimer: number | null = null;
 let safetyEndTimer: number | null = null;
+let publicTtsTimeoutTimer: number | null = null;
 let currentSpeechSession = 0;
 let activeEndCallback: (() => void) | null = null;
+let activeLoadingCacheKey: string | null = null;
 
-const clientTtsAudioCache = new Map<string, { buffer: ArrayBuffer; contentType: string }>();
+interface CachedTtsAudioEntry {
+  buffer: ArrayBuffer;
+  dataB64: string;
+  blobUrl: string;
+  contentType: string;
+}
+
+const clientTtsAudioCache = new Map<string, CachedTtsAudioEntry>();
+const inFlightTtsRequests = new Map<
+  string,
+  Promise<{ buffer: ArrayBuffer; contentType: string } | null>
+>();
 const MAX_CLIENT_TTS_CACHE = 200;
+const PERSISTENT_TTS_CACHE_KEY = 'qalam_tts_audio_cache_v1';
+const MAX_PERSISTENT_TTS_ENTRIES = 40;
+const MAX_PERSISTENT_CLIP_B64_CHARS = 420_000;
 const CLIENT_GEMINI_COOLDOWN_KEY = 'qalam_gemini_tts_cooldown_until';
 const CLIENT_GEMINI_REJECTED_KEY = 'qalam_gemini_tts_rejected_reason';
 const STATIC_API_TTS_UNAVAILABLE_KEY = 'qalam_static_tts_unavailable';
 let clientGeminiTtsCooldownUntil = 0;
 let clientGeminiRejectedReason: string | null = null;
 let staticApiTtsUnavailable = false;
+
+interface StoredTtsClip {
+  dataB64: string;
+  contentType: string;
+  savedAt: number;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return window.btoa(binary);
+}
+
+function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const binary = window.atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+function buildNormalizedTtsCacheKey(
+  mode: 'word' | 'example' | 'sentence',
+  rawText: string
+): string {
+  if (mode === 'word') {
+    const normWord = normalizeArabicWord(rawText);
+    return `word::${normWord || stripTashkeel(rawText).replace(/\s+/g, ' ').trim()}`;
+  }
+  const normPhrase = stripTashkeel(rawText)
+    .replace(/\u0640/g, '')
+    .replace(/[،؟؛.!?"'()«»…\-–—:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 320);
+  return `phrase::${normPhrase}`;
+}
+
+function readPersistentTtsMap(): Record<string, StoredTtsClip> {
+  if (typeof window === 'undefined') return {};
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      const raw = storage?.getItem(PERSISTENT_TTS_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, StoredTtsClip>;
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+  }
+  return {};
+}
+
+function getPersistentTtsCache(
+  key: string
+): { buffer: ArrayBuffer; contentType: string } | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const map = readPersistentTtsMap();
+    const entry = map[key];
+    if (!entry?.dataB64) return null;
+    const buffer = base64ToArrayBuffer(entry.dataB64);
+    if (buffer.byteLength <= 44) return null;
+    return { buffer, contentType: entry.contentType || 'audio/wav' };
+  } catch {
+    return null;
+  }
+}
+
+function setPersistentTtsCache(
+  key: string,
+  buffer: ArrayBuffer,
+  contentType: string
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const dataB64 = arrayBufferToBase64(buffer);
+    if (!dataB64 || dataB64.length > MAX_PERSISTENT_CLIP_B64_CHARS) {
+      return;
+    }
+
+    const map = readPersistentTtsMap();
+    map[key] = {
+      dataB64,
+      contentType: contentType || 'audio/wav',
+      savedAt: Date.now(),
+    };
+
+    const sortedEntries = Object.entries(map).sort(
+      (a, b) => (b[1]?.savedAt || 0) - (a[1]?.savedAt || 0)
+    );
+    let trimmedEntries = sortedEntries.slice(0, MAX_PERSISTENT_TTS_ENTRIES);
+
+    const writeToStorage = (storage: Storage | undefined, entries: Array<[string, StoredTtsClip]>) => {
+      if (!storage) return false;
+      let candidate = [...entries];
+      while (candidate.length > 0) {
+        try {
+          storage.setItem(PERSISTENT_TTS_CACHE_KEY, JSON.stringify(Object.fromEntries(candidate)));
+          return true;
+        } catch {
+          // Evict oldest half on QuotaExceededError and retry
+          if (candidate.length <= 1) break;
+          candidate = candidate.slice(0, Math.ceil(candidate.length / 2));
+        }
+      }
+      return false;
+    };
+
+    writeToStorage(window.localStorage, trimmedEntries);
+    writeToStorage(window.sessionStorage, trimmedEntries.slice(0, 18));
+  } catch {
+    // Non-fatal if storage is unavailable
+  }
+}
+
+export function invalidateCachedArabicAudio(
+  text: string,
+  mode?: 'word' | 'example' | 'sentence'
+): void {
+  if (typeof window === 'undefined' || !text.trim()) return;
+
+  const clean = text.trim().slice(0, 900);
+  const candidateModes: Array<'word' | 'example' | 'sentence'> = mode
+    ? [mode]
+    : ['word', 'example', 'sentence'];
+
+  const keysToRemove = new Set<string>();
+  for (const m of candidateModes) {
+    keysToRemove.add(buildNormalizedTtsCacheKey(m, clean));
+    if (m === 'word') {
+      keysToRemove.add(buildNormalizedTtsCacheKey('word', stripFinalIrabForSpeech(clean)));
+      keysToRemove.add(buildNormalizedTtsCacheKey('word', normalizeStandaloneVocabWord(clean)));
+    } else {
+      keysToRemove.add(buildNormalizedTtsCacheKey(m, sanitizeArabicForSpeech(clean)));
+    }
+  }
+
+  for (const key of keysToRemove) {
+    const existing = clientTtsAudioCache.get(key);
+    if (existing?.blobUrl && existing.blobUrl !== activeObjectUrl) {
+      try {
+        URL.revokeObjectURL(existing.blobUrl);
+      } catch {
+        // Ignore revoke errors
+      }
+    }
+    clientTtsAudioCache.delete(key);
+    inFlightTtsRequests.delete(key);
+  }
+
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      const raw = storage?.getItem(PERSISTENT_TTS_CACHE_KEY);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as Record<string, StoredTtsClip>;
+      if (!parsed || typeof parsed !== 'object') continue;
+      let changed = false;
+      for (const key of keysToRemove) {
+        if (key in parsed) {
+          delete parsed[key];
+          changed = true;
+        }
+      }
+      if (changed) {
+        storage.setItem(PERSISTENT_TTS_CACHE_KEY, JSON.stringify(parsed));
+      }
+    } catch {
+      // Non-fatal if storage is unavailable
+    }
+  }
+}
+
+export interface AudioDiagnosticsSnapshot {
+  speechSynthesisSupported: boolean;
+  totalVoices: number;
+  arabicVoices: Array<{ name: string; lang: string; localService: boolean }>;
+  memoryCachedClips: number;
+  persistentCachedClips: number;
+  geminiAudioCooldownActive: boolean;
+  geminiAudioCooldownRemainingSec: number;
+  geminiAudioRejectedReason: string | null;
+  staticApiTtsUnavailable: boolean;
+}
+
+export function getAudioDiagnosticsSnapshot(): AudioDiagnosticsSnapshot {
+  const speechSynthesisSupported =
+    typeof window !== 'undefined' &&
+    'speechSynthesis' in window &&
+    typeof SpeechSynthesisUtterance !== 'undefined';
+
+  let voices: SpeechSynthesisVoice[] = [];
+  if (speechSynthesisSupported) {
+    try {
+      voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        cachedVoices = voices;
+      } else if (cachedVoices.length > 0) {
+        voices = cachedVoices;
+      }
+    } catch {
+      voices = [];
+    }
+  }
+
+  const arabicVoices = voices
+    .filter((v) => v.lang.toLowerCase().startsWith('ar'))
+    .map((v) => ({
+      name: v.name,
+      lang: v.lang,
+      localService: v.localService,
+    }));
+
+  let persistentCachedClips = 0;
+  if (typeof window !== 'undefined') {
+    try {
+      const raw =
+        window.localStorage?.getItem(PERSISTENT_TTS_CACHE_KEY) ||
+        window.sessionStorage?.getItem(PERSISTENT_TTS_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (parsed && typeof parsed === 'object') {
+          persistentCachedClips = Object.keys(parsed).length;
+        }
+      }
+    } catch {
+      persistentCachedClips = 0;
+    }
+  }
+
+  const cooldownUntil = getClientGeminiCooldownUntil();
+  const remainingMs = Math.max(0, cooldownUntil - Date.now());
+
+  return {
+    speechSynthesisSupported,
+    totalVoices: voices.length,
+    arabicVoices,
+    memoryCachedClips: clientTtsAudioCache.size,
+    persistentCachedClips,
+    geminiAudioCooldownActive: remainingMs > 0,
+    geminiAudioCooldownRemainingSec: Math.ceil(remainingMs / 1000),
+    geminiAudioRejectedReason: getClientGeminiRejectedReason(),
+    staticApiTtsUnavailable: isStaticApiTtsUnavailable(),
+  };
+}
+
+export function clearAllArabicAudioCaches(): { clearedMemory: number; clearedPersistent: number } {
+  stopArabicSpeech();
+  const clearedMemory = clientTtsAudioCache.size;
+  for (const [, entry] of clientTtsAudioCache.entries()) {
+    if (entry?.blobUrl) {
+      try {
+        URL.revokeObjectURL(entry.blobUrl);
+      } catch {
+        // Ignore revoke errors
+      }
+    }
+  }
+  clientTtsAudioCache.clear();
+  inFlightTtsRequests.clear();
+
+  let clearedPersistent = 0;
+  if (typeof window !== 'undefined') {
+    for (const storage of [window.localStorage, window.sessionStorage]) {
+      try {
+        const raw = storage?.getItem(PERSISTENT_TTS_CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          if (parsed && typeof parsed === 'object') {
+            clearedPersistent = Math.max(clearedPersistent, Object.keys(parsed).length);
+          }
+          storage.removeItem(PERSISTENT_TTS_CACHE_KEY);
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }
+    try {
+      window.sessionStorage?.removeItem(CLIENT_GEMINI_COOLDOWN_KEY);
+      window.sessionStorage?.removeItem(CLIENT_GEMINI_REJECTED_KEY);
+      window.sessionStorage?.removeItem(STATIC_API_TTS_UNAVAILABLE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  clientGeminiTtsCooldownUntil = 0;
+  clientGeminiRejectedReason = null;
+  staticApiTtsUnavailable = false;
+
+  return { clearedMemory, clearedPersistent };
+}
 
 function isStaticApiTtsUnavailable(): boolean {
   if (staticApiTtsUnavailable) return true;
@@ -972,12 +1427,39 @@ function setClientGeminiCooldown(durationMs: number, rejectedReason?: string): v
   }
 }
 
-function setClientTtsCache(key: string, value: { buffer: ArrayBuffer; contentType: string }) {
+function setClientTtsCache(
+  key: string,
+  value: { buffer: ArrayBuffer; contentType: string; dataB64?: string }
+): CachedTtsAudioEntry {
+  const existing = clientTtsAudioCache.get(key);
+  if (existing) {
+    return existing;
+  }
   if (clientTtsAudioCache.size >= MAX_CLIENT_TTS_CACHE) {
     const oldestKey = clientTtsAudioCache.keys().next().value;
-    if (oldestKey) clientTtsAudioCache.delete(oldestKey);
+    if (oldestKey) {
+      const oldest = clientTtsAudioCache.get(oldestKey);
+      if (oldest?.blobUrl) {
+        try {
+          URL.revokeObjectURL(oldest.blobUrl);
+        } catch {
+          // Ignore revoke errors
+        }
+      }
+      clientTtsAudioCache.delete(oldestKey);
+    }
   }
-  clientTtsAudioCache.set(key, value);
+  const contentType = value.contentType || 'audio/wav';
+  const dataB64 = value.dataB64 || arrayBufferToBase64(value.buffer);
+  const blobUrl = URL.createObjectURL(new Blob([value.buffer], { type: contentType }));
+  const entry: CachedTtsAudioEntry = {
+    buffer: value.buffer,
+    dataB64,
+    blobUrl,
+    contentType,
+  };
+  clientTtsAudioCache.set(key, entry);
+  return entry;
 }
 
 function getClientViteGeminiApiKey(): string | null {
@@ -1159,6 +1641,10 @@ function clearSpeechTimers() {
     window.clearTimeout(safetyEndTimer);
     safetyEndTimer = null;
   }
+  if (publicTtsTimeoutTimer !== null) {
+    window.clearTimeout(publicTtsTimeoutTimer);
+    publicTtsTimeoutTimer = null;
+  }
   if (activeBoundaryRaf !== null) {
     window.cancelAnimationFrame(activeBoundaryRaf);
     activeBoundaryRaf = null;
@@ -1201,14 +1687,15 @@ function releaseActiveAudio() {
     activeAudioElement = null;
   }
 
-  if (activeObjectUrl) {
+  if (activeObjectUrl && !activeObjectUrlIsCached) {
     try {
       URL.revokeObjectURL(activeObjectUrl);
     } catch {
       // Ignore URL revoke errors
     }
-    activeObjectUrl = null;
   }
+  activeObjectUrl = null;
+  activeObjectUrlIsCached = false;
 }
 
 function notifyTtsNotice(message: string, options?: SpeakArabicOptions) {
@@ -1234,6 +1721,9 @@ export function speakArabic(
   const mode = options.mode ?? 'sentence';
   const sourceText = (options.vocalizedText || text).trim();
 
+  // Automatically invalidate in-memory and session cache entries on re-test so preview uses updated pronunciation logic
+  invalidateCachedArabicAudio(sourceText, mode);
+
   let ttsText = '';
   let karaokeText = '';
   if (mode === 'word') {
@@ -1243,17 +1733,31 @@ export function speakArabic(
     });
     karaokeText = ttsText;
   } else if (mode === 'example') {
-    ttsText = sanitizeArabicForSpeech(sourceText);
+    ttsText = applySmartPartialTashkeel(sourceText);
     karaokeText = ttsText;
   } else {
-    // Keep expressive vocalization for neural AI TTS while tracking stripped length for karaoke boundary indices
-    ttsText = sanitizeArabicForSpeech(sourceText);
+    ttsText = applySmartPartialTashkeel(sourceText);
     karaokeText = stripTashkeel(sourceText).replace(/\s+/g, ' ').trim();
   }
 
   if (!ttsText || typeof window === 'undefined') {
     options.onEnd?.();
     return false;
+  }
+
+  const normalizedCacheKey = buildNormalizedTtsCacheKey(mode, ttsText.slice(0, 900));
+
+  console.info('[Qalam Audio] Spoken text & source details:', {
+    mode,
+    sourceText,
+    ttsText,
+    cacheKey: normalizedCacheKey,
+  });
+
+  // Prevent duplicate parallel requests if audio for this exact normalized word/phrase is already loading
+  if (activeLoadingCacheKey === normalizedCacheKey && inFlightTtsRequests.has(normalizedCacheKey)) {
+    console.info('[Qalam Audio] Audio request already in flight for this text; ignoring duplicate click.');
+    return true;
   }
 
   const prosody = resolveExpressiveProsody({
@@ -1270,6 +1774,7 @@ export function speakArabic(
 
   currentSpeechSession += 1;
   const sessionId = currentSpeechSession;
+  activeLoadingCacheKey = null;
 
   clearSpeechTimers();
   releaseActiveAudio();
@@ -1298,6 +1803,9 @@ export function speakArabic(
 
   const finalize = () => {
     if (currentSpeechSession !== sessionId) return;
+    if (activeLoadingCacheKey === normalizedCacheKey) {
+      activeLoadingCacheKey = null;
+    }
     clearSpeechTimers();
     releaseActiveAudio();
     activeUtterance = null;
@@ -1446,7 +1954,8 @@ export function speakArabic(
 
   const playAudioBufferThroughContext = async (
     audioBuffer: ArrayBuffer,
-    contentType: string
+    contentType: string,
+    cachedBlobUrl?: string
   ): Promise<void> => {
     if (currentSpeechSession !== sessionId) return;
 
@@ -1526,10 +2035,12 @@ export function speakArabic(
       }
     }
 
-    // Fallback to Blob HTMLAudioElement if AudioContext decoding fails
-    const blob = new Blob([audioBuffer], { type: contentType || 'audio/wav' });
-    const objectUrl = URL.createObjectURL(blob);
+    // Fallback to cached or ephemeral Blob URL HTMLAudioElement if AudioContext decoding fails
+    const objectUrl =
+      cachedBlobUrl ||
+      URL.createObjectURL(new Blob([audioBuffer], { type: contentType || 'audio/wav' }));
     activeObjectUrl = objectUrl;
+    activeObjectUrlIsCached = Boolean(cachedBlobUrl);
 
     const audio = new Audio(objectUrl);
     audio.playbackRate = Math.max(0.68, Math.min(1.4, effectiveRate));
@@ -1578,39 +2089,129 @@ export function speakArabic(
     safetyEndTimer = window.setTimeout(finalize, estimatedMs);
   };
 
-  const playDirectGoogleAudioTag = (onErrorFallback: () => void) => {
-    if (currentSpeechSession !== sessionId) return;
-    const directUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(ttsText.slice(0, 180))}&tl=ar&client=tw-ob`;
-    try {
-      const audio = new Audio(directUrl);
-      audio.playbackRate = Math.max(0.68, Math.min(1.4, effectiveRate));
-      activeAudioElement = audio;
-      let started = false;
-
-      audio.onplay = () => {
-        if (currentSpeechSession !== sessionId) return;
-        started = true;
-        options.onStart?.();
-      };
-      audio.onended = () => finalize();
-      audio.onerror = () => {
-        if (currentSpeechSession !== sessionId) return;
-        console.warn('[Qalam Audio] Direct Google TTS <audio> stream was blocked or failed.');
-        onErrorFallback();
-      };
-
-      const p = audio.play();
-      if (p && typeof p.catch === 'function') {
-        p.catch((err) => {
-          if (currentSpeechSession !== sessionId || started) return;
-          console.warn('[Qalam Audio] Direct Google TTS <audio> play() rejected:', err);
-          onErrorFallback();
-        });
+  const splitArabicForPublicTts = (raw: string, maxLen = 165): string[] => {
+    const clean = raw.replace(/\s+/g, ' ').trim();
+    if (clean.length <= maxLen) return clean ? [clean] : [];
+    const chunks: string[] = [];
+    let remaining = clean;
+    while (remaining.length > maxLen) {
+      let cut = -1;
+      for (const sep of ['.', '؟', '!', '؛', '،', ' ']) {
+        const idx = remaining.lastIndexOf(sep, maxLen);
+        if (idx > Math.floor(maxLen * 0.45)) {
+          cut = idx + 1;
+          break;
+        }
       }
-      safetyEndTimer = window.setTimeout(finalize, 12000);
-    } catch {
-      onErrorFallback();
+      if (cut <= 0) cut = maxLen;
+      chunks.push(remaining.slice(0, cut).trim());
+      remaining = remaining.slice(cut).trim();
     }
+    if (remaining) chunks.push(remaining);
+    return chunks;
+  };
+
+  const playPublicWebTtsFallback = async (): Promise<boolean> => {
+    if (currentSpeechSession !== sessionId) return false;
+    const chunks = splitArabicForPublicTts(ttsText.slice(0, 500), 165);
+    if (chunks.length === 0) return false;
+
+    const firstChunk = chunks[0];
+    const playChunk = (chunkText: string, isFirstChunk: boolean): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        if (currentSpeechSession !== sessionId) {
+          resolve(false);
+          return;
+        }
+        const directUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunkText)}&tl=ar&client=tw-ob`;
+        try {
+          const audio = new Audio(directUrl);
+          audio.setAttribute('referrerpolicy', 'no-referrer');
+          audio.preload = 'auto';
+          audio.playbackRate = Math.max(0.68, Math.min(1.4, effectiveRate));
+          activeAudioElement = audio;
+
+          let settled = false;
+          let started = false;
+          const clearTimer = () => {
+            if (publicTtsTimeoutTimer !== null) {
+              window.clearTimeout(publicTtsTimeoutTimer);
+              publicTtsTimeoutTimer = null;
+            }
+          };
+
+          const failChunk = (reason: string) => {
+            if (settled) return;
+            settled = true;
+            clearTimer();
+            try {
+              audio.onplay = null;
+              audio.onended = null;
+              audio.onerror = null;
+              audio.pause();
+            } catch {
+              // Ignore
+            }
+            if (activeAudioElement === audio) {
+              activeAudioElement = null;
+            }
+            console.info(`[Qalam Audio] Public web TTS unavailable (${reason}); advancing fallback.`);
+            resolve(false);
+          };
+
+          publicTtsTimeoutTimer = window.setTimeout(() => {
+            if (!started) {
+              failChunk('load timeout');
+            }
+          }, 2600);
+
+          audio.onplay = () => {
+            if (currentSpeechSession !== sessionId) {
+              failChunk('session cancelled');
+              return;
+            }
+            started = true;
+            clearTimer();
+            if (isFirstChunk) {
+              options.onStart?.();
+            }
+          };
+
+          audio.onended = () => {
+            if (settled) return;
+            settled = true;
+            clearTimer();
+            resolve(true);
+          };
+
+          audio.onerror = () => {
+            failChunk('stream blocked or HTTP error');
+          };
+
+          const playPromise = audio.play();
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch((err) => {
+              failChunk(err instanceof Error ? err.message : 'play() rejected');
+            });
+          }
+        } catch (err) {
+          resolve(false);
+          console.info('[Qalam Audio] Public web TTS init failed:', err);
+        }
+      });
+
+    const firstOk = await playChunk(firstChunk, true);
+    if (!firstOk) return false;
+    if (currentSpeechSession !== sessionId) return true;
+
+    for (let i = 1; i < chunks.length; i++) {
+      if (currentSpeechSession !== sessionId) return true;
+      const nextOk = await playChunk(chunks[i], false);
+      if (!nextOk) break;
+    }
+
+    finalize();
+    return true;
   };
 
   const requestGeminiTtsAudio = async (
@@ -1668,20 +2269,28 @@ export function speakArabic(
     const errText = result.errorBody;
 
     if (!geminiRes.ok) {
-      console.error(
-        `[Qalam Audio] Gemini TTS failed (HTTP ${geminiRes.status} ${geminiRes.statusText}):`,
-        errText
-      );
+      if (/PROXY_GENERATION_DISABLED|generateContent is not supported|401|403|API_KEY_SERVICE_BLOCKED|API keys are not supported/i.test(errText)) {
+        geminiDiag = 'Gemini audio model disabled by environment / proxy; using web TTS fallback.';
+        console.info('[Qalam Audio]', geminiDiag);
+        setClientGeminiCooldown(24 * 3600 * 1000, geminiDiag);
+      } else {
+        console.warn(
+          `[Qalam Audio] Gemini TTS failed (HTTP ${geminiRes.status} ${geminiRes.statusText}):`,
+          errText
+        );
+      }
       if (geminiRes.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(errText)) {
-        geminiDiag = 'VITE_GEMINI_API_KEY quota exceeded (HTTP 429 RESOURCE_EXHAUSTED)';
-        setClientGeminiCooldown(30 * 60 * 1000, geminiDiag);
+        const quota = parseGeminiQuotaInfo(errText, 'audio');
+        geminiDiag = quota.userMessage;
+        setClientGeminiCooldown(quota.cooldownMs, quota.userMessage);
+        notifyGeminiQuotaNotice(quota.userMessage);
       } else if (
         geminiRes.status === 401 ||
         geminiRes.status === 403 ||
-        /API_KEY_INVALID|PERMISSION_DENIED/i.test(errText)
+        /API_KEY_INVALID|PERMISSION_DENIED|API_KEY_SERVICE_BLOCKED|API keys are not supported|PROXY_GENERATION_DISABLED/i.test(errText)
       ) {
-        geminiDiag = `VITE_GEMINI_API_KEY rejected by Gemini API (HTTP ${geminiRes.status})`;
-        setClientGeminiCooldown(60 * 60 * 1000, geminiDiag);
+        geminiDiag = `Gemini audio model restricted or disabled (HTTP ${geminiRes.status})`;
+        setClientGeminiCooldown(24 * 3600 * 1000, geminiDiag);
       } else {
         geminiDiag = `Gemini TTS returned HTTP ${geminiRes.status}: ${errText.slice(0, 140)}`;
       }
@@ -1711,171 +2320,233 @@ export function speakArabic(
     };
   };
 
-  const fetchAndPlayAiAudio = async (allowSpeechSynthesisFallback: boolean) => {
-    if (currentSpeechSession !== sessionId) return;
-
-    const cleanForUrl = ttsText.slice(0, 900);
-    const cacheKey = `${mode}::${cleanForUrl}`;
-    const cached = clientTtsAudioCache.get(cacheKey);
-
-    if (cached) {
-      try {
-        await playAudioBufferThroughContext(cached.buffer, cached.contentType);
-        return;
-      } catch (err) {
-        console.warn('[Qalam Audio] Cached clip failed, refetching:', err);
-        clientTtsAudioCache.delete(cacheKey);
-      }
+  const requestAiAudioOrServerCache = async (
+    cleanForUrl: string,
+    cacheKey: string
+  ): Promise<{ buffer: ArrayBuffer; contentType: string } | null> => {
+    const existingInFlight = inFlightTtsRequests.get(cacheKey);
+    if (existingInFlight) {
+      return existingInFlight;
     }
 
-    options.onLoading?.();
+    const requestPromise = (async (): Promise<{
+      buffer: ArrayBuffer;
+      contentType: string;
+    } | null> => {
+      const genController = new AbortController();
+      const genTimeoutMs = mode === 'word' ? 7000 : mode === 'example' ? 9000 : 12000;
+      const genTimer = window.setTimeout(() => genController.abort(), genTimeoutMs);
 
-    const controller = new AbortController();
-    activeFetchController = controller;
-    const timeoutMs = mode === 'word' ? 6000 : mode === 'example' ? 8000 : 12000;
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        // 1. Try backend `/api/tts` first if running on full-stack Node host (non-static)
+        if (!isStaticApiTtsUnavailable()) {
+          try {
+            const params = new URLSearchParams({
+              q: cleanForUrl,
+              mode,
+              style: prosody.style,
+            });
+            const res = await fetch(`/api/tts?${params.toString()}`, {
+              signal: genController.signal,
+            });
+            const ct = (res.headers.get('content-type') || '').toLowerCase();
 
-    try {
-      let fetchedBuffer: ArrayBuffer | null = null;
-      let fetchedContentType = 'audio/wav';
+            if (res.ok && ct.startsWith('audio/')) {
+              const buf = await res.arrayBuffer();
+              if (buf.byteLength > 100) {
+                return { buffer: buf, contentType: ct };
+              }
+            } else if (res.status === 404 || res.status === 405 || !ct.startsWith('audio/')) {
+              markStaticApiTtsUnavailable();
+            }
+          } catch (serverErr) {
+            if ((serverErr as Error)?.name !== 'AbortError') {
+              console.info(
+                '[Qalam Audio] /api/tts unavailable:',
+                serverErr instanceof Error ? serverErr.message : serverErr
+              );
+            }
+          }
+        }
 
-      // 1. Direct Gemini Audio / TTS FIRST when VITE_GEMINI_API_KEY is present and active
-      const clientGeminiKey = getClientViteGeminiApiKey();
-      if (!clientGeminiKey) {
-        geminiDiag = 'VITE_GEMINI_API_KEY is missing in environment';
-      } else if (Date.now() < getClientGeminiCooldownUntil()) {
-        geminiDiag = getClientGeminiRejectedReason() || 'Gemini TTS cooldown active';
-      } else {
+        // 2. Direct Gemini TTS when VITE_GEMINI_API_KEY is present and not cooling down
+        const clientGeminiKey = getClientViteGeminiApiKey();
+        if (!clientGeminiKey) {
+          geminiDiag = 'VITE_GEMINI_API_KEY is missing in environment';
+          return null;
+        }
+
+        const cooldownUntil = getClientGeminiCooldownUntil();
+        if (Date.now() < cooldownUntil) {
+          const secsLeft = Math.max(5, Math.ceil((cooldownUntil - Date.now()) / 1000));
+          geminiDiag =
+            secsLeft <= 120
+              ? `Free audio quota is temporarily cooling down — please retry in ~${secsLeft} seconds.`
+              : getClientGeminiRejectedReason() ||
+                'Free audio quota is temporarily cooling down — please retry in 30–60 seconds.';
+          return null;
+        }
+
         try {
           const geminiAudio = await requestGeminiTtsAudio(
             clientGeminiKey,
             cleanForUrl,
-            controller.signal
+            genController.signal
           );
           if (geminiAudio) {
-            fetchedBuffer = geminiAudio.buffer;
-            fetchedContentType = geminiAudio.contentType;
+            return geminiAudio;
           }
         } catch (geminiErr) {
           if ((geminiErr as Error)?.name === 'AbortError') {
-            geminiDiag = `Direct Gemini TTS timed out after ${timeoutMs}ms`;
-            throw geminiErr;
-          }
-          geminiDiag = `Direct Gemini TTS network error (${geminiErr instanceof Error ? geminiErr.message : String(geminiErr)})`;
-          console.warn(`[Qalam Audio] ${geminiDiag}; falling back.`);
-        }
-      }
-
-      // 2. Fallback to backend `/api/tts` proxy when available (full-stack preview / Node host)
-      if (!fetchedBuffer && !isStaticApiTtsUnavailable()) {
-        try {
-          const params = new URLSearchParams({
-            q: cleanForUrl,
-            mode,
-            style: prosody.style,
-          });
-          const res = await fetch(`/api/tts?${params.toString()}`, {
-            signal: controller.signal,
-          });
-          const ct = (res.headers.get('content-type') || '').toLowerCase();
-
-          if (res.ok && ct.startsWith('audio/')) {
-            const buf = await res.arrayBuffer();
-            if (buf.byteLength > 100) {
-              fetchedBuffer = buf;
-              fetchedContentType = ct;
-            }
+            geminiDiag = `Direct Gemini TTS timed out after ${genTimeoutMs}ms`;
           } else {
-            if (res.status === 404 || res.status === 405 || !ct.startsWith('audio/')) {
-              markStaticApiTtsUnavailable();
-            }
-            console.info(
-              `[Qalam Audio] /api/tts unavailable (status=${res.status}); trying browser speechSynthesis.`
-            );
+            geminiDiag = `Direct Gemini TTS network error (${geminiErr instanceof Error ? geminiErr.message : String(geminiErr)})`;
           }
-        } catch (serverErr) {
-          if ((serverErr as Error)?.name === 'AbortError') {
-            throw serverErr;
-          }
-          console.info(
-            '[Qalam Audio] /api/tts unavailable:',
-            serverErr instanceof Error ? serverErr.message : serverErr
-          );
+          console.warn(`[Qalam Audio] ${geminiDiag}`);
         }
+
+        return null;
+      } finally {
+        window.clearTimeout(genTimer);
       }
+    })();
 
-      window.clearTimeout(timeoutId);
-      if (activeFetchController === controller) {
-        activeFetchController = null;
+    inFlightTtsRequests.set(cacheKey, requestPromise);
+    try {
+      const clip = await requestPromise;
+      // Persist immediately on generation even if user navigated away so Gemini quota is never wasted twice
+      if (clip) {
+        setClientTtsCache(cacheKey, clip);
+        setPersistentTtsCache(cacheKey, clip.buffer, clip.contentType);
       }
-      if (currentSpeechSession !== sessionId) return;
-
-      if (fetchedBuffer) {
-        setClientTtsCache(cacheKey, {
-          buffer: fetchedBuffer,
-          contentType: fetchedContentType,
-        });
-        await playAudioBufferThroughContext(fetchedBuffer, fetchedContentType);
-        return;
-      }
-
-      // 3. Smarter Web Speech API fallback (prefers ar-SA, ar-EG, ar-XA, or any ar* voice)
-      if (allowSpeechSynthesisFallback) {
-        const startedSpeech = tryBrowserSpeechSynthesis(() => {
-          playDirectGoogleAudioTag(() => failAndNotify());
-        });
-        if (startedSpeech) return;
-      }
-
-      // 4. Final direct audio stream attempt before reporting friendly diagnostic
-      playDirectGoogleAudioTag(() => failAndNotify());
-    } catch (err) {
-      window.clearTimeout(timeoutId);
-      if (activeFetchController === controller) {
-        activeFetchController = null;
-      }
-      if (currentSpeechSession !== sessionId) return;
-
-      console.info(
-        `[Qalam Audio] AI audio pipeline interrupted (${err instanceof Error ? err.message : String(err)}); checking browser Arabic voices.`
-      );
-
-      if (allowSpeechSynthesisFallback) {
-        const startedSpeech = tryBrowserSpeechSynthesis(() => {
-          playDirectGoogleAudioTag(() => failAndNotify());
-        });
-        if (startedSpeech) return;
-      }
-
-      playDirectGoogleAudioTag(() => failAndNotify());
+      return clip;
+    } finally {
+      inFlightTtsRequests.delete(cacheKey);
     }
   };
 
-  const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+  const runAudioPlaybackChain = async () => {
+    if (currentSpeechSession !== sessionId) return;
 
-  // Unified expressive pronunciation pipeline across standalone words, card examples, AND lesson reading passages:
-  // Direct VITE_GEMINI_API_KEY TTS -> unlocked AudioContext -> /api/tts -> Arabic speechSynthesis (ar-SA/ar-EG/ar-XA/ar*) -> <audio> fallback.
-  if (isOnline) {
-    void fetchAndPlayAiAudio(true);
-    return true;
-  }
+    const cleanForUrl = ttsText.slice(0, 900);
+    const cacheKey = normalizedCacheKey;
 
-  geminiDiag = 'Browser appears offline (navigator.onLine === false)';
-  const startedBrowserSpeech = tryBrowserSpeechSynthesis(
-    () => {
-      failAndNotify();
-    },
-    true
-  );
+    // 1. Check normalized cache (memory base64/blob URL -> localStorage/sessionStorage base64) FIRST
+    const memCached = clientTtsAudioCache.get(cacheKey);
+    if (memCached) {
+      try {
+        await playAudioBufferThroughContext(
+          memCached.buffer,
+          memCached.contentType,
+          memCached.blobUrl
+        );
+        return;
+      } catch (err) {
+        console.warn('[Qalam Audio] Cached memory clip failed, clearing:', err);
+        try {
+          URL.revokeObjectURL(memCached.blobUrl);
+        } catch {
+          // Ignore
+        }
+        clientTtsAudioCache.delete(cacheKey);
+      }
+    }
 
-  if (!startedBrowserSpeech) {
-    failAndNotify();
-  }
+    const persistentCached = getPersistentTtsCache(cacheKey);
+    if (persistentCached) {
+      const promoted = setClientTtsCache(cacheKey, persistentCached);
+      try {
+        await playAudioBufferThroughContext(
+          promoted.buffer,
+          promoted.contentType,
+          promoted.blobUrl
+        );
+        return;
+      } catch (err) {
+        console.warn('[Qalam Audio] Persistent cached clip failed:', err);
+        clientTtsAudioCache.delete(cacheKey);
+      }
+    }
+
+    // 2. If browser speechSynthesis has a genuine Arabic (ar-*) voice, use it directly (0 Gemini quota spent)
+    const voiceInfo = resolveArabicVoiceInfo();
+    const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+
+    const continueAfterBrowserVoiceUnavailable = async () => {
+      if (currentSpeechSession !== sessionId) return;
+
+      if (!isOnline) {
+        geminiDiag = 'Browser appears offline (navigator.onLine === false)';
+        failAndNotify();
+        return;
+      }
+
+      activeLoadingCacheKey = cacheKey;
+      options.onLoading?.();
+
+      // 3. When window.speechSynthesis has no ar-* voice (or failed), try free public web TTS fallback BEFORE Gemini audio
+      const publicPlayed = await playPublicWebTtsFallback();
+      if (publicPlayed || currentSpeechSession !== sessionId) {
+        if (activeLoadingCacheKey === cacheKey) {
+          activeLoadingCacheKey = null;
+        }
+        return;
+      }
+
+      // 4. Fallback to Gemini TTS (or server cache) and cache result by normalized Arabic text
+      const fetchedClip = await requestAiAudioOrServerCache(cleanForUrl, cacheKey);
+      if (activeLoadingCacheKey === cacheKey) {
+        activeLoadingCacheKey = null;
+      }
+      if (currentSpeechSession !== sessionId) return;
+
+      if (fetchedClip) {
+        const stored = setClientTtsCache(cacheKey, fetchedClip);
+        await playAudioBufferThroughContext(stored.buffer, stored.contentType, stored.blobUrl);
+        return;
+      }
+
+      // 5. Last resort if speechSynthesis had 0 loaded voices initially: try ar-SA speechSynthesis once
+      if (!voiceInfo.hasArabicVoice && voiceInfo.totalVoices === 0) {
+        const lastResortStarted = tryBrowserSpeechSynthesis(() => {
+          const cooldownReason =
+            geminiDiag.toLowerCase().includes('cooling down') ||
+            geminiDiag.toLowerCase().includes('quota') ||
+            geminiDiag.toLowerCase().includes('429')
+              ? geminiDiag
+              : undefined;
+          failAndNotify(cooldownReason);
+        });
+        if (lastResortStarted) return;
+      }
+
+      // Calm notice if Gemini quota is cooling down, otherwise gentle fallback message
+      const cooldownReason =
+        geminiDiag.toLowerCase().includes('cooling down') ||
+        geminiDiag.toLowerCase().includes('quota') ||
+        geminiDiag.toLowerCase().includes('429')
+          ? geminiDiag
+          : undefined;
+      failAndNotify(cooldownReason);
+    };
+
+    if (voiceInfo.hasArabicVoice && voiceInfo.voice) {
+      const startedSpeech = tryBrowserSpeechSynthesis(() => {
+        void continueAfterBrowserVoiceUnavailable();
+      }, true);
+      if (startedSpeech) return;
+    }
+
+    await continueAfterBrowserVoiceUnavailable();
+  };
+
+  void runAudioPlaybackChain();
   return true;
 }
 
 export function stopArabicSpeech(): void {
   currentSpeechSession += 1;
+  activeLoadingCacheKey = null;
   clearSpeechTimers();
   releaseActiveAudio();
   activeUtterance = null;

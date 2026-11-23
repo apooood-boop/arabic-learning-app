@@ -521,6 +521,9 @@ export function LessonReader({
 
   const handleToggleSpeech = () => {
     unlockArabicAudioContext();
+    if (isLoadingSpeech) {
+      return;
+    }
     if (isSpeaking) {
       stopKaraoke();
       return;

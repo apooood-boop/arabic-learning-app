@@ -10,11 +10,24 @@ export type ActiveTab = 'lessons' | 'vocabulary' | 'exams' | 'conversation' | 'h
 
 export type LessonContentType = 'text' | 'video';
 
+export type UserRole = 'student' | 'moderator' | 'admin';
+
 export interface AuthUser {
   id: string;
   name: string;
   email: string;
+  role?: UserRole;
+  isPrimaryOwner?: boolean;
   isGuest?: boolean;
+  createdAt: number;
+}
+
+export interface AdminManagedAccount {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  isPrimaryOwner: boolean;
   createdAt: number;
 }
 
@@ -52,6 +65,7 @@ export interface VocabCard extends WordAnalysis {
   nextReviewAt?: number;
   intervalDays?: number;
   reviewCount?: number;
+  hasCustomEdits?: boolean;
 }
 
 export interface TranscriptSegment {

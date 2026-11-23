@@ -16,20 +16,116 @@ import {
   formatMinimalArabicRoot,
   inferArabicWordType,
   normalizeArabicWord,
+  normalizeStandaloneArabicKey,
+  normalizeStandaloneVocabWord,
   parsePastedTranscriptSegments,
   stripFinalIrabForSpeech,
+  stripTashkeel,
 } from './arabic';
 import {
   fetchGeminiGenerateContent,
   getClientGeminiApiKey,
+  notifyGeminiQuotaNotice,
+  parseGeminiQuotaInfo,
 } from './geminiAuth';
 
 export { getClientGeminiApiKey };
 
 const GEMINI_API_COOLDOWN_KEY = 'qalam_gemini_text_cooldown_until';
-const GEMINI_MODEL = 'gemini-3.1-flash-lite';
+const GEMINI_QUOTA_REASON_KEY = 'qalam_gemini_text_quota_reason';
+const GEMINI_RESPONSE_CACHE_KEY = 'qalam_gemini_response_cache_v1';
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const MAX_MEMORY_RESPONSE_CACHE = 200;
+const MAX_PERSISTENT_RESPONSE_CACHE = 90;
 
 let memoryCooldownUntil = 0;
+let memoryQuotaNotice: string | null = null;
+
+interface StoredGeminiEntry {
+  value: unknown;
+  savedAt: number;
+}
+
+const memoryResponseCache = new Map<string, unknown>();
+const inFlightClientTasks = new Map<string, Promise<unknown>>();
+
+function normalizePhraseCacheKey(text: string): string {
+  return stripTashkeel(text)
+    .replace(/\u0640/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function readPersistentResponseMap(): Record<string, StoredGeminiEntry> {
+  if (typeof window === 'undefined') return {};
+  for (const storage of [window.localStorage, window.sessionStorage]) {
+    try {
+      const raw = storage?.getItem(GEMINI_RESPONSE_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, StoredGeminiEntry>;
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+  }
+  return {};
+}
+
+function getCachedGeminiResult<T>(cacheKey: string): T | null {
+  if (memoryResponseCache.has(cacheKey)) {
+    return memoryResponseCache.get(cacheKey) as T;
+  }
+  try {
+    const map = readPersistentResponseMap();
+    const entry = map[cacheKey];
+    if (entry && entry.value !== undefined) {
+      memoryResponseCache.set(cacheKey, entry.value);
+      return entry.value as T;
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  return null;
+}
+
+function setCachedGeminiResult<T>(cacheKey: string, value: T): void {
+  if (memoryResponseCache.size >= MAX_MEMORY_RESPONSE_CACHE) {
+    const oldestKey = memoryResponseCache.keys().next().value;
+    if (oldestKey) memoryResponseCache.delete(oldestKey);
+  }
+  memoryResponseCache.set(cacheKey, value);
+
+  if (typeof window === 'undefined') return;
+  try {
+    const map = readPersistentResponseMap();
+    map[cacheKey] = { value, savedAt: Date.now() };
+    const sorted = Object.entries(map)
+      .sort((a, b) => (b[1]?.savedAt || 0) - (a[1]?.savedAt || 0))
+      .slice(0, MAX_PERSISTENT_RESPONSE_CACHE);
+
+    const writeToStorage = (storage: Storage | undefined, entries: Array<[string, StoredGeminiEntry]>) => {
+      if (!storage) return;
+      let candidate = [...entries];
+      while (candidate.length > 0) {
+        try {
+          storage.setItem(GEMINI_RESPONSE_CACHE_KEY, JSON.stringify(Object.fromEntries(candidate)));
+          return;
+        } catch {
+          if (candidate.length <= 1) break;
+          candidate = candidate.slice(0, Math.ceil(candidate.length / 2));
+        }
+      }
+    };
+
+    writeToStorage(window.localStorage, sorted);
+    writeToStorage(window.sessionStorage, sorted.slice(0, 30));
+  } catch {
+    // Ignore storage write errors
+  }
+}
 
 function getCooldownUntil(): number {
   if (memoryCooldownUntil > Date.now()) return memoryCooldownUntil;
@@ -48,16 +144,113 @@ function getCooldownUntil(): number {
   return 0;
 }
 
-function setCooldown(durationMs: number): void {
+function getActiveQuotaNotice(): string | null {
+  if (Date.now() >= getCooldownUntil()) return null;
+  if (memoryQuotaNotice) return memoryQuotaNotice;
+  try {
+    if (typeof window !== 'undefined') {
+      const stored = window.sessionStorage?.getItem(GEMINI_QUOTA_REASON_KEY);
+      if (stored) {
+        memoryQuotaNotice = stored;
+        return stored;
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return null;
+}
+
+function setCooldown(durationMs: number, quotaReason?: string): void {
   const until = Date.now() + durationMs;
   memoryCooldownUntil = until;
+  if (quotaReason) {
+    memoryQuotaNotice = quotaReason;
+  }
   try {
     if (typeof window !== 'undefined') {
       window.sessionStorage?.setItem(GEMINI_API_COOLDOWN_KEY, String(until));
+      if (quotaReason) {
+        window.sessionStorage?.setItem(GEMINI_QUOTA_REASON_KEY, quotaReason);
+      }
     }
   } catch {
     // Ignore storage access errors
   }
+}
+
+export interface GeminiTextDiagnosticsSnapshot {
+  cooldownActive: boolean;
+  cooldownRemainingSec: number;
+  quotaReason: string | null;
+  memoryCacheEntries: number;
+  persistentCacheEntries: number;
+  placeholderEntriesInResponseCache: number;
+}
+
+export function getGeminiTextDiagnosticsSnapshot(): GeminiTextDiagnosticsSnapshot {
+  const until = getCooldownUntil();
+  const remainingMs = Math.max(0, until - Date.now());
+  const persistentMap = readPersistentResponseMap();
+  const persistentKeys = Object.keys(persistentMap);
+  let placeholderEntriesInResponseCache = 0;
+
+  for (const key of persistentKeys) {
+    const val = persistentMap[key]?.value as Partial<WordAnalysis> | undefined;
+    if (
+      val &&
+      typeof val.englishMeaning === 'string' &&
+      val.englishMeaning.startsWith('Contextual Arabic word')
+    ) {
+      placeholderEntriesInResponseCache += 1;
+    }
+  }
+
+  return {
+    cooldownActive: remainingMs > 0,
+    cooldownRemainingSec: Math.ceil(remainingMs / 1000),
+    quotaReason: getActiveQuotaNotice(),
+    memoryCacheEntries: memoryResponseCache.size,
+    persistentCacheEntries: persistentKeys.length,
+    placeholderEntriesInResponseCache,
+  };
+}
+
+export function clearGeminiResponseCaches(): {
+  clearedMemory: number;
+  clearedPersistent: number;
+} {
+  const clearedMemory = memoryResponseCache.size;
+  memoryResponseCache.clear();
+  inFlightClientTasks.clear();
+  memoryCooldownUntil = 0;
+  memoryQuotaNotice = null;
+
+  let clearedPersistent = 0;
+  if (typeof window !== 'undefined') {
+    for (const storage of [window.localStorage, window.sessionStorage]) {
+      try {
+        const raw = storage?.getItem(GEMINI_RESPONSE_CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          if (parsed && typeof parsed === 'object') {
+            clearedPersistent = Math.max(clearedPersistent, Object.keys(parsed).length);
+          }
+          storage.removeItem(GEMINI_RESPONSE_CACHE_KEY);
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }
+    try {
+      window.sessionStorage?.removeItem(GEMINI_API_COOLDOWN_KEY);
+      window.sessionStorage?.removeItem(GEMINI_QUOTA_REASON_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  return { clearedMemory, clearedPersistent };
 }
 
 function getLevelExampleInstruction(level: ProficiencyLevel): string {
@@ -79,13 +272,216 @@ function getLevelExampleInstruction(level: ProficiencyLevel): string {
 
 function cleanJsonString(raw: string): string {
   const trimmed = raw.trim();
-  if (trimmed.startsWith('```')) {
-    return trimmed
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/, '')
-      .trim();
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const unfenced = (fencedMatch ? fencedMatch[1] : trimmed)
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  if (!unfenced.startsWith('{') && !unfenced.startsWith('[')) {
+    const firstBrace = unfenced.indexOf('{');
+    const lastBrace = unfenced.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return unfenced.slice(firstBrace, lastBrace + 1).trim();
+    }
+    const firstBracket = unfenced.indexOf('[');
+    const lastBracket = unfenced.lastIndexOf(']');
+    if (firstBracket !== -1 && lastBracket > firstBracket) {
+      return unfenced.slice(firstBracket, lastBracket + 1).trim();
+    }
   }
-  return trimmed;
+  return unfenced;
+}
+
+export function isFakePlaceholderTranslation(
+  analysis: Pick<WordAnalysis, 'englishMeaning'> | null | undefined
+): boolean {
+  const meaning = analysis?.englishMeaning?.trim() || '';
+  return (
+    !meaning ||
+    meaning.startsWith('Contextual Arabic word') ||
+    meaning.startsWith('Translation pending')
+  );
+}
+
+export class GeminiTranslationError extends Error {
+  status?: number;
+  code?: 'MISSING_KEY' | 'QUOTA_EXCEEDED' | 'AUTH_ERROR' | 'NETWORK_ERROR' | 'EMPTY_RESPONSE' | 'API_ERROR';
+
+  constructor(
+    message: string,
+    options?: {
+      status?: number;
+      code?: GeminiTranslationError['code'];
+    }
+  ) {
+    super(message);
+    this.name = 'GeminiTranslationError';
+    this.status = options?.status;
+    this.code = options?.code;
+  }
+}
+
+function stripMarkdownFormatting(text: string): string {
+  return text
+    .replace(/```(?:json|text|markdown)?/gi, '')
+    .replace(/```/g, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/^[-*•]\s+/gm, '')
+    .trim();
+}
+
+function parseGeminiTranslationOutput(
+  rawText: string,
+  trimmedWord: string,
+  targetLevel: ProficiencyLevel
+): WordAnalysis | null {
+  const cleanedRaw = rawText.trim();
+  if (!cleanedRaw) return null;
+
+  // 1. Try JSON parsing (including markdown-fenced or prose-wrapped JSON)
+  try {
+    const jsonCandidate = cleanJsonString(cleanedRaw);
+    if (jsonCandidate.startsWith('{')) {
+      const parsed = JSON.parse(jsonCandidate) as Partial<Omit<WordAnalysis, 'word' | 'source'>> & {
+        meaning?: string;
+        translation?: string;
+        english?: string;
+        pos?: string;
+      };
+
+      const rawMeaning = (
+        parsed.englishMeaning ||
+        parsed.translation ||
+        parsed.meaning ||
+        parsed.english ||
+        ''
+      ).trim();
+
+      if (rawMeaning && !rawMeaning.startsWith('Contextual Arabic word')) {
+        const resolvedPartOfSpeech =
+          (parsed.partOfSpeech || parsed.pos || '').trim() || 'Word';
+        const resolvedWordType = inferArabicWordType(parsed.wordType || resolvedPartOfSpeech);
+        const standaloneWordAr = normalizeStandaloneVocabWord(
+          parsed.wordWithTashkeel || trimmedWord,
+          {
+            wordType: resolvedWordType,
+            partOfSpeech: resolvedPartOfSpeech,
+          }
+        );
+        const finalDisplayWord = applySmartPartialTashkeel(
+          standaloneWordAr || parsed.wordWithTashkeel || trimmedWord
+        );
+
+        const rawExamples = Array.isArray(parsed.examples) ? parsed.examples : [];
+        const cleanExamples = rawExamples
+          .filter(
+            (ex): ex is { arabic: string; english: string; contextLabel?: string } =>
+              Boolean(ex && typeof ex.arabic === 'string' && ex.arabic.trim() && typeof ex.english === 'string' && ex.english.trim())
+          )
+          .slice(0, 3)
+          .map((ex) => ({
+            arabic: applySmartPartialTashkeel(ex.arabic.trim()),
+            english: ex.english.trim(),
+            contextLabel: ex.contextLabel?.trim(),
+          }));
+
+        return {
+          word: stripTashkeel(finalDisplayWord),
+          wordWithTashkeel: finalDisplayWord,
+          vocalizedWord: stripFinalIrabForSpeech(
+            parsed.vocalizedWord || finalDisplayWord,
+            {
+              wordType: resolvedWordType,
+              partOfSpeech: resolvedPartOfSpeech,
+            }
+          ),
+          partOfSpeech: resolvedPartOfSpeech,
+          wordType: resolvedWordType,
+          root: formatMinimalArabicRoot(parsed.root),
+          transliteration: (parsed.transliteration || '').trim(),
+          englishMeaning: rawMeaning,
+          examples: cleanExamples,
+          level: targetLevel,
+          source: 'gemini',
+        };
+      }
+    }
+  } catch {
+    // Fall through cleanly to plain-text parsing below
+  }
+
+  // 2. Clean plain-text / markdown fallback parsing
+  const plain = stripMarkdownFormatting(cleanedRaw);
+  if (!plain || plain.startsWith('{') || plain.startsWith('[')) {
+    return null;
+  }
+
+  const lines = plain
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let englishMeaning = '';
+  let transliteration = '';
+  let partOfSpeech = 'Translation';
+  const extraContextLines: string[] = [];
+
+  for (const line of lines) {
+    const meaningMatch = line.match(/^(?:english\s*)?(?:translation|meaning|definition)\s*:\s*(.+)$/i);
+    if (meaningMatch?.[1]) {
+      englishMeaning = meaningMatch[1].trim();
+      continue;
+    }
+    const translitMatch = line.match(/^transliteration\s*:\s*(.+)$/i);
+    if (translitMatch?.[1]) {
+      transliteration = translitMatch[1].trim();
+      continue;
+    }
+    const posMatch = line.match(/^part\s*of\s*speech\s*:\s*(.+)$/i);
+    if (posMatch?.[1]) {
+      partOfSpeech = posMatch[1].trim();
+      continue;
+    }
+    const contextMatch = line.match(/^(?:context|note|usage)\s*:\s*(.+)$/i);
+    if (contextMatch?.[1]) {
+      extraContextLines.push(contextMatch[1].trim());
+      continue;
+    }
+    extraContextLines.push(line);
+  }
+
+  if (!englishMeaning) {
+    englishMeaning = extraContextLines.join(' — ').trim() || plain;
+  } else if (extraContextLines.length > 0 && extraContextLines.join(' ').length < 180) {
+    englishMeaning = `${englishMeaning} (${extraContextLines.join('; ')})`;
+  }
+
+  if (!englishMeaning) return null;
+
+  const resolvedWordType = inferArabicWordType(partOfSpeech);
+  const standaloneWordAr = normalizeStandaloneVocabWord(trimmedWord, {
+    wordType: resolvedWordType,
+    partOfSpeech,
+  });
+  const finalDisplayWord = applySmartPartialTashkeel(standaloneWordAr || trimmedWord);
+
+  return {
+    word: stripTashkeel(finalDisplayWord),
+    wordWithTashkeel: finalDisplayWord,
+    vocalizedWord: stripFinalIrabForSpeech(finalDisplayWord, {
+      wordType: resolvedWordType,
+      partOfSpeech,
+    }),
+    partOfSpeech,
+    wordType: resolvedWordType,
+    root: '',
+    transliteration,
+    englishMeaning,
+    examples: [],
+    level: targetLevel,
+    source: 'gemini',
+  };
 }
 
 async function generateGeminiJson<T>(params: {
@@ -121,7 +517,6 @@ async function generateGeminiJson<T>(params: {
           },
         ],
         generationConfig: {
-          thinkingConfig: { thinkingLevel: 'MINIMAL' },
           responseMimeType: 'application/json',
           responseSchema: params.responseSchema,
         },
@@ -134,7 +529,9 @@ async function generateGeminiJson<T>(params: {
         errorBody
       );
       if (response.status === 429 || /RESOURCE_EXHAUSTED|quota|rate[- ]?limit/i.test(errorBody)) {
-        setCooldown(30 * 60 * 1000);
+        const quota = parseGeminiQuotaInfo(errorBody, 'text');
+        setCooldown(quota.cooldownMs, quota.userMessage);
+        notifyGeminiQuotaNotice(quota.userMessage);
       } else if (
         response.status === 401 ||
         response.status === 403 ||
@@ -178,104 +575,242 @@ export async function analyzeArabicWordClient(params: {
   const trimmedWord = params.word.trim();
   const trimmedContext = params.contextSentence?.trim() || trimmedWord;
   const targetLevel: ProficiencyLevel = params.level ?? 'intermediate';
+  const cacheKey = `word::${targetLevel}::${normalizeStandaloneArabicKey(trimmedWord)}::${normalizePhraseCacheKey(trimmedContext).slice(0, 120)}`;
 
-  const fallback = lookupFallbackWord(trimmedWord, trimmedContext, undefined, targetLevel);
-
-  const apiKey = getClientGeminiApiKey();
-  if (!apiKey || Date.now() < getCooldownUntil()) {
-    return fallback;
+  const cached = getCachedGeminiResult<WordAnalysis>(cacheKey);
+  if (cached && !isFakePlaceholderTranslation(cached)) {
+    return { ...cached, source: 'cache' };
   }
 
-  const prompt = `Analyze this Arabic word for a ${targetLevel} learner.
-Word: "${trimmedWord}"
-Context sentence: "${trimmedContext}"
+  const pending = inFlightClientTasks.get(cacheKey);
+  if (pending) {
+    return pending as Promise<WordAnalysis>;
+  }
+
+  const task = (async (): Promise<WordAnalysis> => {
+    const curatedMatch = lookupFallbackWord(trimmedWord, trimmedContext, undefined, targetLevel);
+    const apiKey = getClientGeminiApiKey();
+
+    if (!apiKey) {
+      const missingKeyMsg =
+        'Translation unavailable: Gemini API key (VITE_GEMINI_API_KEY) is not configured.';
+      console.error('[Qalam Translation]', missingKeyMsg);
+      if (curatedMatch) {
+        return {
+          ...curatedMatch,
+          notice: 'Showing curated Arabic dictionary entry (VITE_GEMINI_API_KEY not configured).',
+        };
+      }
+      throw new GeminiTranslationError(missingKeyMsg, { code: 'MISSING_KEY' });
+    }
+
+    if (Date.now() < getCooldownUntil()) {
+      const cooldownMsg =
+        getActiveQuotaNotice() ||
+        'Gemini free quota was reached (HTTP 429). Please wait a moment and try again.';
+      console.error('[Qalam Translation] Skipping request during quota cooldown:', cooldownMsg);
+      if (curatedMatch) {
+        return {
+          ...curatedMatch,
+          notice: cooldownMsg,
+        };
+      }
+      throw new GeminiTranslationError(cooldownMsg, { status: 429, code: 'QUOTA_EXCEEDED' });
+    }
+
+    const prompt = `Translate and analyze this Arabic word or phrase accurately for a ${targetLevel} learner.
+Arabic word/phrase: "${trimmedWord}"
+${trimmedContext !== trimmedWord ? `Context sentence: "${trimmedContext}"` : ''}
+
+Give an accurate, natural English translation (including brief contextual meaning if helpful in this sentence).
 
 ${getLevelExampleInstruction(targetLevel)}
 
-Return strict JSON with:
-- wordWithTashkeel: the Arabic word formatted with Smart Partial Tashkeel (التشكيل الجزئي الذكي: vowelize final letter / حركة الإعراب, essential الشدة, and critical Sukun).
-- vocalizedWord: the exact same Arabic word with COMPLETE internal harakat (فتحة، ضمة، كسرة، شدة، سكون) for crystal-clear audio pronunciation, in PAUSAL form WITHOUT trailing grammatical case vowels or tanween on the final letter (سكون الوقف بدون حركة الإعراب).
-- partOfSpeech: concise English POS (e.g. "Noun", "Verb (Present)", "Adjective", "Adverb", "Preposition").
-- wordType: ONE concise Arabic grammatical category chosen strictly from: "اسم", "فعل", "حرف", "ظرف", "صفة", or "ضمير".
-- root: ONLY the original 3 or 4 root Arabic letters separated by " - " (for example "ك - ت - ب" or "ق - و - م"). NEVER include derived words, meanings, or extra text. Return "" if it is an uninflected particle/pronoun with no triliteral root.
-- transliteration: clean Latin phonetic transliteration.
-- englishMeaning: accurate English meaning in the given context (if polysemous, mention primary + secondary sense briefly).
-- examples: 2 (or 3 if strongly polysemous) HYPER-REALISTIC, natural Arabic sentences STRICTLY calibrated to the ${targetLevel} level above.
-  * POLYSEMY RULE: If the word has multiple common meanings across contexts, each example showcases a distinct real-world meaning while staying strictly at the ${targetLevel} level!
-  * Strictly use Smart Partial Tashkeel (التشكيل الجزئي الذكي: vowelize final endings/tanwin, Shaddah, and critical Sukun; leave middle letters clean).
-  * Include contextLabel (e.g. "${targetLevel === 'beginner' ? 'Beginner · Daily Use' : targetLevel === 'advanced' ? 'Advanced · Literary Context' : 'Intermediate · Practical Use'}") and accurate English translation for each.`;
+Return JSON with:
+- wordWithTashkeel: normalize/extract the standalone vocabulary/dictionary form (NOT locked to sentence-specific grammatical case endings / الإعراب such as genitive -i or accusative -a/-an; e.g. turn "المَكْتَبَةِ" into "المَكْتَبَة", "كِتَابًا" into "كِتَاب", while keeping inherent past verbs or adverbs natural). Include essential Shaddah and Smart Partial Tashkeel.
+- vocalizedWord: the exact same standalone Arabic word with full internal harakat in pausal form WITHOUT trailing case vowels or tanween on the final letter.
+- partOfSpeech: concise English POS (e.g. "Noun", "Verb (Present)", "Adjective", "Phrase").
+- wordType: ONE Arabic category from: "اسم", "فعل", "حرف", "ظرف", "صفة", or "ضمير".
+- root: ONLY the 3 or 4 root Arabic letters separated by " - " (e.g. "ك - ت - ب"), or "" if none.
+- transliteration: clean Latin phonetic transliteration of the standalone word/phrase.
+- englishMeaning: accurate English translation and brief contextual meaning if needed.
+- examples: 2 natural Arabic sentences strictly calibrated to the ${targetLevel} level with Smart Partial Tashkeel, English translation, and contextLabel.`;
 
-  const parsed = await generateGeminiJson<Omit<WordAnalysis, 'word' | 'source'>>({
-    prompt,
-    systemInstruction:
-      'You are a native-speaking Arabic linguist and curriculum designer. Strictly match example sentence complexity, length, and vocabulary to the requested learner level (beginner, intermediate, or advanced), provide complete internal vocalization without final case endings in vocalizedWord, and return Smart Partial Tashkeel in display fields.',
-    timeoutMs: 4000,
-    responseSchema: {
-      type: 'OBJECT',
-      properties: {
-        wordWithTashkeel: { type: 'STRING' },
-        vocalizedWord: { type: 'STRING' },
-        partOfSpeech: { type: 'STRING' },
-        wordType: { type: 'STRING' },
-        root: { type: 'STRING' },
-        transliteration: { type: 'STRING' },
-        englishMeaning: { type: 'STRING' },
-        examples: {
-          type: 'ARRAY',
-          items: {
-            type: 'OBJECT',
-            properties: {
-              arabic: { type: 'STRING' },
-              english: { type: 'STRING' },
-              contextLabel: { type: 'STRING' },
+    const controller = new AbortController();
+    const timer =
+      typeof window !== 'undefined'
+        ? window.setTimeout(() => controller.abort(), 8500)
+        : setTimeout(() => controller.abort(), 8500);
+
+    try {
+      const { response, errorBody } = await fetchGeminiGenerateContent({
+        model: GEMINI_MODEL,
+        apiKey,
+        signal: controller.signal,
+        logPrefix: 'Qalam Translation',
+        payload: {
+          systemInstruction: {
+            parts: [
+              {
+                text: 'You are an expert Arabic-English translator and linguist. Provide an accurate, natural English translation and brief contextual meaning. Prefer clean JSON matching the requested schema, with standalone vocabulary normalization and pausal vocalizedWord.',
+              },
+            ],
+          },
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: prompt }],
             },
-            required: ['arabic', 'english'],
+          ],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'OBJECT',
+              properties: {
+                wordWithTashkeel: { type: 'STRING' },
+                vocalizedWord: { type: 'STRING' },
+                partOfSpeech: { type: 'STRING' },
+                wordType: { type: 'STRING' },
+                root: { type: 'STRING' },
+                transliteration: { type: 'STRING' },
+                englishMeaning: { type: 'STRING' },
+                examples: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      arabic: { type: 'STRING' },
+                      english: { type: 'STRING' },
+                      contextLabel: { type: 'STRING' },
+                    },
+                    required: ['arabic', 'english'],
+                  },
+                },
+              },
+              required: [
+                'wordWithTashkeel',
+                'vocalizedWord',
+                'partOfSpeech',
+                'wordType',
+                'root',
+                'transliteration',
+                'englishMeaning',
+                'examples',
+              ],
+            },
           },
         },
-      },
-      required: [
-        'wordWithTashkeel',
-        'vocalizedWord',
-        'partOfSpeech',
-        'wordType',
-        'root',
-        'transliteration',
-        'englishMeaning',
-        'examples',
-      ],
-    },
-  });
+      });
 
-  if (!parsed || !Array.isArray(parsed.examples) || parsed.examples.length < 1 || !parsed.englishMeaning) {
-    return fallback;
-  }
+      if (!response.ok) {
+        console.error(
+          `[Qalam Translation] ${GEMINI_MODEL} error HTTP ${response.status} ${response.statusText}:`,
+          errorBody
+        );
 
-  const resolvedWordType = inferArabicWordType(parsed.wordType || parsed.partOfSpeech);
-  const resolvedPartOfSpeech = parsed.partOfSpeech || fallback.partOfSpeech || 'Word';
+        let userMessage = `Gemini translation failed (HTTP ${response.status}). Please try again.`;
+        let code: GeminiTranslationError['code'] = 'API_ERROR';
 
-  return {
-    word: trimmedWord,
-    wordWithTashkeel: applySmartPartialTashkeel(parsed.wordWithTashkeel || trimmedWord),
-    vocalizedWord: stripFinalIrabForSpeech(
-      parsed.vocalizedWord || parsed.wordWithTashkeel || trimmedWord,
-      {
-        wordType: resolvedWordType,
-        partOfSpeech: resolvedPartOfSpeech,
+        if (response.status === 429 || /RESOURCE_EXHAUSTED|quota|rate[- ]?limit/i.test(errorBody)) {
+          const quota = parseGeminiQuotaInfo(errorBody, 'text');
+          userMessage =
+            quota.scope === 'daily'
+              ? 'Gemini free daily translation quota was reached (HTTP 429). Please try again later.'
+              : 'Gemini free translation quota is cooling down (HTTP 429). Please wait a few seconds and try again.';
+          setCooldown(quota.cooldownMs, userMessage);
+          notifyGeminiQuotaNotice(userMessage);
+          code = 'QUOTA_EXCEEDED';
+        } else if (
+          response.status === 401 ||
+          response.status === 403 ||
+          /API_KEY_INVALID|PERMISSION_DENIED/i.test(errorBody)
+        ) {
+          setCooldown(60 * 60 * 1000, 'Gemini API key was rejected (HTTP 401/403).');
+          userMessage = `Translation failed: Gemini API key was rejected (HTTP ${response.status}).`;
+          code = 'AUTH_ERROR';
+        }
+
+        if (curatedMatch) {
+          return { ...curatedMatch, notice: userMessage };
+        }
+        throw new GeminiTranslationError(userMessage, { status: response.status, code });
       }
-    ),
-    partOfSpeech: resolvedPartOfSpeech,
-    wordType: resolvedWordType,
-    root: formatMinimalArabicRoot(parsed.root),
-    transliteration: parsed.transliteration || fallback.transliteration || '',
-    englishMeaning: parsed.englishMeaning,
-    examples: parsed.examples.slice(0, 3).map((ex) => ({
-      arabic: applySmartPartialTashkeel(ex.arabic),
-      english: ex.english,
-      contextLabel: ex.contextLabel,
-    })),
-    level: targetLevel,
-    source: 'gemini',
-  };
+
+      const payload = (await response.json()) as {
+        candidates?: Array<{
+          content?: {
+            parts?: Array<{ text?: string }>;
+          };
+        }>;
+      };
+      const rawText =
+        payload.candidates?.[0]?.content?.parts
+          ?.map((p) => p.text || '')
+          .join('\n')
+          .trim() || '';
+
+      if (!rawText) {
+        console.error('[Qalam Translation] Gemini returned empty response payload:', payload);
+        if (curatedMatch) {
+          return {
+            ...curatedMatch,
+            notice: 'Gemini returned an empty response — showing curated dictionary entry.',
+          };
+        }
+        throw new GeminiTranslationError(
+          'Gemini returned an empty translation response. Please try again.',
+          { code: 'EMPTY_RESPONSE' }
+        );
+      }
+
+      const parsedResult = parseGeminiTranslationOutput(rawText, trimmedWord, targetLevel);
+      if (!parsedResult) {
+        console.error('[Qalam Translation] Could not parse Gemini translation response:', rawText);
+        if (curatedMatch) {
+          return {
+            ...curatedMatch,
+            notice: 'Could not parse Gemini response — showing curated dictionary entry.',
+          };
+        }
+        throw new GeminiTranslationError(
+          'Could not read the translation returned by Gemini. Please try again.',
+          { code: 'EMPTY_RESPONSE' }
+        );
+      }
+
+      setCachedGeminiResult(cacheKey, parsedResult);
+      return parsedResult;
+    } catch (err) {
+      if (err instanceof GeminiTranslationError) {
+        throw err;
+      }
+
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError' || /abort|timeout/i.test(errMsg);
+      console.error(
+        `[Qalam Translation] Request to ${GEMINI_MODEL} failed:`,
+        err
+      );
+
+      const userMessage = isTimeout
+        ? 'Translation request timed out while contacting Gemini. Please try again.'
+        : 'Network error while contacting Gemini translation service. Please check your connection and try again.';
+
+      if (curatedMatch) {
+        return { ...curatedMatch, notice: userMessage };
+      }
+      throw new GeminiTranslationError(userMessage, { code: 'NETWORK_ERROR' });
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+
+  inFlightClientTasks.set(cacheKey, task);
+  try {
+    return await task;
+  } finally {
+    inFlightClientTasks.delete(cacheKey);
+  }
 }
 
 export function hasInstantLexiconMatch(word: string): boolean {
@@ -289,10 +824,16 @@ export async function generateLessonQuizClient(params: {
   level?: ProficiencyLevel;
 }): Promise<LessonQuizResponse> {
   const cleanTitle = params.titleEn?.trim() || 'Arabic Reading Passage';
+  const cacheKey = `quiz::${params.level || 'intermediate'}::${params.lessonId || ''}::${normalizePhraseCacheKey(params.textAr).slice(0, 220)}`;
+  const cached = getCachedGeminiResult<LessonQuizResponse>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const fallbackPayload: LessonQuizResponse = {
     questions: generateFallbackLessonQuiz(params.lessonId, params.textAr, cleanTitle),
     source: 'fallback',
-    notice: 'Built-in comprehension questions for this passage.',
+    notice: getActiveQuotaNotice() || 'Built-in comprehension questions for this passage.',
   };
 
   const apiKey = getClientGeminiApiKey();
@@ -373,10 +914,12 @@ Rules:
     };
   });
 
-  return {
+  const quizResult: LessonQuizResponse = {
     questions: sanitized,
     source: 'gemini',
   };
+  setCachedGeminiResult(cacheKey, quizResult);
+  return quizResult;
 }
 
 export async function fetchYouTubeOEmbedClient(youtubeUrl: string): Promise<{
@@ -579,9 +1122,21 @@ export async function generateExamClient(params: {
   }>;
   fallbackBuilder: () => GeneratedExam;
 }): Promise<GeneratedExam> {
+  const wordsSig = params.words
+    .slice(0, 14)
+    .map((w) => normalizeArabicWord(w.wordWithTashkeel))
+    .join(',');
+  const cacheKey = `exam::${params.level}::${params.focus}::${params.count}::${wordsSig}`;
+  const cached = getCachedGeminiResult<GeneratedExam>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const apiKey = getClientGeminiApiKey();
   if (!apiKey || Date.now() < getCooldownUntil()) {
-    return params.fallbackBuilder();
+    const fb = params.fallbackBuilder();
+    const qNotice = getActiveQuotaNotice();
+    return qNotice ? { ...fb, notice: qNotice } : fb;
   }
 
   const levelLabels: Record<ProficiencyLevel, { en: string; ar: string }> = {
@@ -605,11 +1160,12 @@ export async function generateExamClient(params: {
   const prompt = `Create a ${questionCount}-question Arabic vocabulary & contextual comprehension exam for a ${params.level} (${levelLabels[params.level].ar}) learner.
 Focus mode: ${params.focus}
 
-Learner's Saved Vocabulary Words:
+Learner's Saved Vocabulary Words (treat as flexible standalone dictionary entries, NOT frozen to any single sentence's case ending / i'rab):
 ${wordsSummary}
 
 Requirements:
 - Prioritize testing the learner's saved Arabic words listed above.
+- Treat each saved word as a flexible vocabulary item: naturally inflect or adapt its case endings, prefixes (like ال or بـ), or verb forms inside fill-in-the-blank and contextual sentences so every Arabic sentence is 100% grammatical, while keeping targetWordAr clear as the standalone dictionary form.
 - Mix question types: "meaning" (identify the exact English meaning from context), "fill_blank" (complete an Arabic sentence with ______ using the right Arabic word from 4 choices), and "usage" (choose the best Arabic sentence or contextual nuance).
 - Use Smart Partial Tashkeel (التشكيل الجزئي الذكي) on all Arabic prompts, sentences, and Arabic options.
 - Always provide exactly 4 distinct options per question and accurate correctIndex (0..3).
@@ -711,7 +1267,7 @@ Requirements:
     };
   });
 
-  return {
+  const examResult: GeneratedExam = {
     titleEn: parsed.titleEn || `${levelLabels[params.level].en} Vocabulary Exam`,
     titleAr: applySmartPartialTashkeel(
       parsed.titleAr || `امتحانُ المفرداتِ — المستوى ${levelLabels[params.level].ar}`
@@ -720,6 +1276,8 @@ Requirements:
     questions: sanitizedQuestions,
     source: 'gemini',
   };
+  setCachedGeminiResult(cacheKey, examResult);
+  return examResult;
 }
 
 export async function generateConversationClient(params: {
@@ -732,12 +1290,23 @@ export async function generateConversationClient(params: {
   }>;
   fallbackBuilder: () => GeneratedConversation;
 }): Promise<GeneratedConversation> {
-  const apiKey = getClientGeminiApiKey();
-  if (!apiKey || Date.now() < getCooldownUntil()) {
-    return params.fallbackBuilder();
+  const chosenScenario = params.customTopic?.trim() || params.scenarioId.trim() || 'cafe';
+  const wordsSig = params.words
+    .slice(0, 8)
+    .map((w) => normalizeArabicWord(w.wordWithTashkeel))
+    .join(',');
+  const cacheKey = `conv::${params.level}::${normalizePhraseCacheKey(chosenScenario)}::${wordsSig}`;
+  const cached = getCachedGeminiResult<GeneratedConversation>(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  const chosenScenario = params.customTopic?.trim() || params.scenarioId.trim() || 'cafe';
+  const apiKey = getClientGeminiApiKey();
+  if (!apiKey || Date.now() < getCooldownUntil()) {
+    const fb = params.fallbackBuilder();
+    const qNotice = getActiveQuotaNotice();
+    return qNotice ? { ...fb, notice: qNotice } : fb;
+  }
   const cleanWords = params.words.slice(0, 8);
   const wordsInstruction =
     cleanWords.length > 0
@@ -748,13 +1317,13 @@ export async function generateConversationClient(params: {
 Scenario / Topic: "${chosenScenario}"
 ${getLevelExampleInstruction(params.level)}
 
-Naturally weave as many of these saved learner words as fit naturally into the dialogue & practice sentences:
+Naturally weave as many of these saved learner vocabulary items as fit naturally into the dialogue & practice sentences (treat them as flexible standalone dictionary entries — adapt case endings/prefixes/verb conjugation naturally to fit each sentence's grammar rather than using frozen citation endings):
 ${wordsInstruction}
 
 Requirements:
 - Produce 6 natural dialogue turns alternating between a conversational partner ("partner") and the learner ("learner").
 - Include Arabic text with Smart Partial Tashkeel (التشكيل الجزئي الذكي), clean transliteration, natural English translation, and list which target words appeared in each turn (usedWords).
-- Also produce 4 standalone real-life practice sentences featuring the learner's vocabulary with a brief tipEn for speaking practice.`;
+- Also produce 4 standalone real-life practice sentences featuring the learner's vocabulary (grammatically adapted in fresh natural contexts) with a brief tipEn for speaking practice.`;
 
   const parsed = await generateGeminiJson<{
     titleAr?: string;
@@ -836,7 +1405,7 @@ Requirements:
     return params.fallbackBuilder();
   }
 
-  return {
+  const convResult: GeneratedConversation = {
     scenarioId: chosenScenario,
     titleAr: applySmartPartialTashkeel(parsed.titleAr || 'مُحَادَثَةٌ عَرَبِيَّةٌ'),
     titleEn: parsed.titleEn || 'Arabic Conversation Practice',
@@ -867,4 +1436,6 @@ Requirements:
     })),
     source: 'gemini',
   };
+  setCachedGeminiResult(cacheKey, convResult);
+  return convResult;
 }

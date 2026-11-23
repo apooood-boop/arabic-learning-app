@@ -25,81 +25,133 @@ export interface GeminiRestResult {
 
 export async function fetchGeminiGenerateContent(params: {
   model: string;
-  apiKey: string;
+  apiKey?: string;
   payload: unknown;
   signal?: AbortSignal;
   logPrefix?: string;
 }): Promise<GeminiRestResult> {
-  const cleanKey = params.apiKey.trim();
   const logPrefix = params.logPrefix || 'Gemini API';
-  const baseUrl = `https://generativelanguage.googleapis.com/v1beta/models/${params.model}:generateContent`;
-  const bodyJson = JSON.stringify(params.payload);
-  const isAuthToken = cleanKey.startsWith('AQ.');
+  const url = '/api/gemini/generateContent';
 
-  const primaryUrl = baseUrl;
-  const primaryHeaders: Record<string, string> = isAuthToken
-    ? {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      signal: params.signal,
+      headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${cleanKey}`,
-      }
-    : {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': cleanKey,
-      };
+      },
+      body: JSON.stringify({
+        model: params.model,
+        payload: params.payload,
+      }),
+    });
 
-  const primaryRes = await fetch(primaryUrl, {
-    method: 'POST',
-    signal: params.signal,
-    headers: primaryHeaders,
-    body: bodyJson,
-  });
+    if (res.ok) {
+      return { response: res, errorBody: '' };
+    }
 
-  if (primaryRes.ok) {
-    return { response: primaryRes, errorBody: '' };
+    const errorBody = await res.text().catch(() => '');
+    console.error(`[${logPrefix}] Server Gemini proxy failed (HTTP ${res.status}):`, errorBody);
+    return { response: res, errorBody };
+  } catch (err) {
+    const errorBody = err instanceof Error ? err.message : String(err);
+    console.error(`[${logPrefix}] Network error contacting server Gemini proxy:`, errorBody);
+    return {
+      response: new Response(JSON.stringify({ error: errorBody }), { status: 500 }),
+      errorBody,
+    };
   }
-
-  const primaryErrorBody = await primaryRes.text().catch(() => '');
-  console.error(
-    `[${logPrefix}] Request to ${params.model} failed (${isAuthToken ? 'Bearer' : 'x-goog-api-key'}, HTTP ${primaryRes.status} ${primaryRes.statusText}):`,
-    primaryErrorBody
-  );
-
-  // Only attempt auth-header fallback on auth/bad-request failures (400/401/403), never on 404 or 429
-  const shouldRetryAuthFallback =
-    primaryRes.status === 400 || primaryRes.status === 401 || primaryRes.status === 403;
-
-  if (!shouldRetryAuthFallback) {
-    return { response: primaryRes, errorBody: primaryErrorBody };
-  }
-
-  const fallbackUrl = isAuthToken
-    ? baseUrl
-    : `${baseUrl}?key=${encodeURIComponent(cleanKey)}`;
-  const fallbackHeaders: Record<string, string> = isAuthToken
-    ? {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': cleanKey,
-      }
-    : {
-        'Content-Type': 'application/json',
-      };
-
-  const fallbackRes = await fetch(fallbackUrl, {
-    method: 'POST',
-    signal: params.signal,
-    headers: fallbackHeaders,
-    body: bodyJson,
-  });
-
-  if (fallbackRes.ok) {
-    return { response: fallbackRes, errorBody: '' };
-  }
-
-  const fallbackErrorBody = await fallbackRes.text().catch(() => '');
-  console.error(
-    `[${logPrefix}] Fallback request to ${params.model} failed (${isAuthToken ? 'x-goog-api-key' : 'query-param'}, HTTP ${fallbackRes.status} ${fallbackRes.statusText}):`,
-    fallbackErrorBody
-  );
-
-  return { response: fallbackRes, errorBody: fallbackErrorBody };
 }
+
+export interface GeminiQuotaInfo {
+  scope: 'daily' | 'minute' | 'general';
+  cooldownMs: number;
+  userMessage: string;
+}
+
+export function parseGeminiQuotaInfo(
+  errorBody: string,
+  feature: 'audio' | 'text' = 'text'
+): GeminiQuotaInfo {
+  const secMatch = errorBody.match(/"retryDelay"\s*:\s*"(\d+)s"/i);
+  const retrySeconds = secMatch?.[1] ? Number(secMatch[1]) : 0;
+
+  const isDaily =
+    /PerDay|daily|free_tier_requests/i.test(errorBody) ||
+    (Number.isFinite(retrySeconds) && retrySeconds >= 1800);
+  const isMinute =
+    !isDaily &&
+    (/PerMinute|per_minute|minute|RPM/i.test(errorBody) ||
+      (Number.isFinite(retrySeconds) && retrySeconds > 0 && retrySeconds < 1800));
+
+  if (feature === 'audio') {
+    const cooldownMs =
+      Number.isFinite(retrySeconds) && retrySeconds > 0
+        ? Math.min(10 * 60 * 1000, Math.max(35 * 1000, retrySeconds * 1000))
+        : isDaily
+          ? 60 * 1000
+          : 45 * 1000;
+
+    const waitHint =
+      Number.isFinite(retrySeconds) && retrySeconds >= 25 && retrySeconds <= 90
+        ? `retry in ~${retrySeconds} seconds`
+        : 'retry in 30–60 seconds';
+
+    if (isDaily) {
+      return {
+        scope: 'daily',
+        cooldownMs,
+        userMessage: `Free audio quota is temporarily cooling down — please ${waitHint} (or later if the daily free limit was reached).`,
+      };
+    }
+    return {
+      scope: isMinute ? 'minute' : 'general',
+      cooldownMs,
+      userMessage: `Free audio quota is temporarily cooling down — please ${waitHint}.`,
+    };
+  }
+
+  const cooldownMs =
+    Number.isFinite(retrySeconds) && retrySeconds > 0
+      ? Math.min(12 * 60 * 60 * 1000, Math.max(45 * 1000, retrySeconds * 1000))
+      : isDaily
+        ? 4 * 60 * 60 * 1000
+        : isMinute
+          ? 2 * 60 * 1000
+          : 15 * 60 * 1000;
+
+  const fallbackLabel = 'Using cached entries & built-in Arabic fallback cleanly.';
+
+  if (isDaily) {
+    return {
+      scope: 'daily',
+      cooldownMs,
+      userMessage: `Gemini free daily quota was reached (HTTP 429). ${fallbackLabel}`,
+    };
+  }
+  if (isMinute) {
+    return {
+      scope: 'minute',
+      cooldownMs,
+      userMessage: `Gemini free per-minute quota was reached (HTTP 429). ${fallbackLabel}`,
+    };
+  }
+  return {
+    scope: 'general',
+    cooldownMs,
+    userMessage: `Gemini free daily/minute quota was reached (HTTP 429). ${fallbackLabel}`,
+  };
+}
+
+let lastQuotaNoticeAt = 0;
+
+export function notifyGeminiQuotaNotice(message: string): void {
+  if (typeof window === 'undefined') return;
+  const now = Date.now();
+  if (now - lastQuotaNoticeAt < 4000) return;
+  lastQuotaNoticeAt = now;
+  window.dispatchEvent(
+    new CustomEvent('qalam:quota-notice', { detail: { message } })
+  );
+}
+

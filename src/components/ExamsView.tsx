@@ -23,6 +23,7 @@ import {
 import {
   applySmartPartialTashkeel,
   LEVEL_LABELS,
+  normalizeStandaloneVocabWord,
   speakArabic,
   stopArabicSpeech,
   stripTashkeel,
@@ -98,7 +99,12 @@ function buildClientFallbackExam(
   const questions = Array.from({ length: Math.min(count, Math.max(3, fallbackPool.length)) }).map(
     (_, idx) => {
       const card = fallbackPool[idx % fallbackPool.length];
-      const targetAr = applySmartPartialTashkeel(card.wordWithTashkeel);
+      const isEdited = 'hasCustomEdits' in card && card.hasCustomEdits;
+      const targetAr = isEdited
+        ? card.wordWithTashkeel
+        : applySmartPartialTashkeel(
+            normalizeStandaloneVocabWord(card.wordWithTashkeel) || card.wordWithTashkeel
+          );
       const meaning = card.englishMeaning;
       const otherMeanings = fallbackPool
         .filter((c) => c.englishMeaning !== meaning)
@@ -216,6 +222,9 @@ export function ExamsView({
 
   const handleListen = (arabicText: string, mode: 'word' | 'example') => {
     unlockArabicAudioContext();
+    if (audioState === 'loading') {
+      return;
+    }
     if (audioState !== 'idle') {
       stopArabicSpeech();
       setAudioState('idle');

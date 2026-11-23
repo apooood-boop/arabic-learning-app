@@ -5,6 +5,7 @@ import {
   Clock,
   Flame,
   Loader2,
+  Pencil,
   RotateCw,
   Trash2,
   Volume2,
@@ -21,6 +22,7 @@ interface Flashcard3DProps {
   onFlipChange?: (flipped: boolean) => void;
   onUpdateStatus?: (id: string, status: PracticeStatus) => void;
   onToggleDifficult?: (id: string) => void;
+  onEdit?: (card: VocabCard) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -38,6 +40,7 @@ export function Flashcard3D({
   onFlipChange,
   onUpdateStatus,
   onToggleDifficult,
+  onEdit,
   onDelete,
 }: Flashcard3DProps) {
   const [internalFlipped, setInternalFlipped] = useState(false);
@@ -89,6 +92,9 @@ export function Flashcard3D({
   const handleSpeak = (e: MouseEvent, text: string, key: 'word' | number) => {
     e.stopPropagation();
     unlockArabicAudioContext();
+    if (speakingPhase === 'loading') {
+      return;
+    }
     if (speakingKey === key) {
       stopArabicSpeech();
       setSpeakingKey(null);
@@ -96,14 +102,15 @@ export function Flashcard3D({
       return;
     }
     if (key === 'word') {
-      const vocalizedText =
-        card.vocalizedWord ||
-        getLexiconSpeechText(
-          card.word,
-          card.wordWithTashkeel,
-          wordType,
-          card.partOfSpeech
-        );
+      const vocalizedText = card.hasCustomEdits
+        ? card.wordWithTashkeel
+        : card.vocalizedWord ||
+          getLexiconSpeechText(
+            card.word,
+            card.wordWithTashkeel,
+            wordType,
+            card.partOfSpeech
+          );
       speakArabic(text, {
         rate: speechRate,
         mode: 'word',
@@ -137,6 +144,7 @@ export function Flashcard3D({
       speakArabic(text, {
         rate: speechRate,
         mode: 'example',
+        vocalizedText: text,
         onLoading: () => {
           setSpeakingKey(key);
           setSpeakingPhase('loading');
@@ -239,32 +247,52 @@ export function Flashcard3D({
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={(e) => handleSpeak(e, card.wordWithTashkeel, 'word')}
-              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer touch-manipulation ${
-                speakingKey === 'word'
-                  ? 'border-[#2D3B22] bg-[#2D3B22] text-[#E8B948] ring-4 ring-[#DCE5D3]'
-                  : 'border-[#DCE5D3] bg-[#FBF3DC]/70 text-[#24301B] hover:bg-[#FBF3DC]'
-              }`}
-            >
-              {speakingKey === 'word' && speakingPhase === 'loading' ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 text-[#E8B948] animate-spin" aria-hidden="true" />
-                  <span>Loading · انتظر</span>
-                </>
-              ) : (
-                <>
-                  <Volume2
-                    className={`h-3.5 w-3.5 ${
-                      speakingKey === 'word' ? 'text-[#E8B948] animate-pulse' : 'text-[#9A6F14]'
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <span>{speakingKey === 'word' ? 'Playing · استمع' : 'Pronounce · استمع'}</span>
-                </>
+            <div className="flex items-center gap-1.5">
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEdit(card);
+                  }}
+                  aria-label={`تعديل / Edit ${card.wordWithTashkeel}`}
+                  className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#5A6552] hover:border-[#2D3B22]/40 hover:bg-[#EEF2E9] hover:text-[#2D3B22] transition-colors cursor-pointer touch-manipulation"
+                >
+                  <Pencil className="h-3 w-3 text-[#9A6F14]" aria-hidden="true" />
+                  <span className="font-arabic-cairo">تعديل</span>
+                  <span aria-hidden="true" className="text-[#DCE5D3]">/</span>
+                  <span>Edit</span>
+                </button>
               )}
-            </button>
+
+              <button
+                type="button"
+                onClick={(e) => handleSpeak(e, card.wordWithTashkeel, 'word')}
+                aria-busy={speakingKey === 'word' && speakingPhase === 'loading'}
+                className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all cursor-pointer touch-manipulation ${
+                  speakingKey === 'word'
+                    ? 'border-[#2D3B22] bg-[#2D3B22] text-[#E8B948] ring-4 ring-[#DCE5D3]'
+                    : 'border-[#DCE5D3] bg-[#FBF3DC]/70 text-[#24301B] hover:bg-[#FBF3DC]'
+                }`}
+              >
+                {speakingKey === 'word' && speakingPhase === 'loading' ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 text-[#E8B948] animate-spin" aria-hidden="true" />
+                    <span>Loading · انتظر</span>
+                  </>
+                ) : (
+                  <>
+                    <Volume2
+                      className={`h-3.5 w-3.5 ${
+                        speakingKey === 'word' ? 'text-[#E8B948] animate-pulse' : 'text-[#9A6F14]'
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span>{speakingKey === 'word' ? 'Playing · استمع' : 'Pronounce · استمع'}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
           <div dir="rtl" lang="ar" className="py-2 text-center">
@@ -273,7 +301,9 @@ export function Flashcard3D({
                 large ? 'text-5xl sm:text-6xl' : 'text-4xl sm:text-5xl'
               }`}
             >
-              {applySmartPartialTashkeel(card.wordWithTashkeel)}
+              {card.hasCustomEdits
+                ? card.wordWithTashkeel
+                : applySmartPartialTashkeel(card.wordWithTashkeel)}
             </p>
             {(wordType || root) && (
               <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 font-arabic-cairo">
@@ -314,12 +344,13 @@ export function Flashcard3D({
                       </p>
                     )}
                     <p className="font-arabic-scheherazade text-xl sm:text-[21px] leading-[2.15] text-[#1F2718]">
-                      {applySmartPartialTashkeel(ex.arabic)}
+                      {card.hasCustomEdits ? ex.arabic : applySmartPartialTashkeel(ex.arabic)}
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={(e) => handleSpeak(e, ex.arabic, idx)}
+                    aria-busy={isPlayingSentence && speakingPhase === 'loading'}
                     aria-label={`Listen to Arabic sentence ${idx + 1}`}
                     className={`mt-2 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all cursor-pointer ${
                       isPlayingSentence
@@ -359,8 +390,12 @@ export function Flashcard3D({
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#DCE5D3]/80 pb-3 select-none">
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#5A6552]">
               <span className="font-semibold text-[#1F2718]">{card.partOfSpeech}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono text-[#5A6552] select-text">{card.transliteration}</span>
+              {card.transliteration && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-[#5A6552] select-text">{card.transliteration}</span>
+                </>
+              )}
               {card.level && (
                 <>
                   <span aria-hidden="true">·</span>
@@ -387,27 +422,29 @@ export function Flashcard3D({
             </h3>
           </div>
 
-          <div className="space-y-2 border-t border-[#DCE5D3]/80 pt-3">
-            <p className="text-xs font-semibold text-[#5A6552]">Context Translations</p>
-            {card.examples.slice(0, 3).map((ex, idx) => (
-              <div
-                key={idx}
-                className="rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2 text-sm leading-relaxed text-[#1F2718]"
-              >
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="font-mono text-xs font-bold text-[#9A6F14]">
-                    0{idx + 1}.
-                  </span>
-                  {ex.contextLabel && (
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#2D3B22]">
-                      {ex.contextLabel}
+          {card.examples.length > 0 && (
+            <div className="space-y-2 border-t border-[#DCE5D3]/80 pt-3">
+              <p className="text-xs font-semibold text-[#5A6552]">Context Translations</p>
+              {card.examples.slice(0, 3).map((ex, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2 text-sm leading-relaxed text-[#1F2718]"
+                >
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="font-mono text-xs font-bold text-[#9A6F14]">
+                      0{idx + 1}.
                     </span>
-                  )}
+                    {ex.contextLabel && (
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#2D3B22]">
+                        {ex.contextLabel}
+                      </span>
+                    )}
+                  </div>
+                  <p>{ex.english}</p>
                 </div>
-                <p>{ex.english}</p>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#DCE5D3]/80 pt-3">
             <div className="flex flex-wrap items-center gap-2">

@@ -248,7 +248,7 @@ export function QuizMode({
 
   const handleToggleSpeech = useCallback(() => {
     unlockArabicAudioContext();
-    if (!currentQuestion) return;
+    if (!currentQuestion || wordAudioState === 'loading') return;
     if (wordAudioState !== 'idle') {
       stopArabicSpeech();
       setWordAudioState('idle');
@@ -484,7 +484,9 @@ export function QuizMode({
             lang="ar"
             className="font-arabic-scheherazade text-5xl sm:text-6xl font-bold text-[#1F2718] leading-[1.8]"
           >
-            {applySmartPartialTashkeel(currentQuestion.card.wordWithTashkeel)}
+            {currentQuestion.card.hasCustomEdits
+              ? currentQuestion.card.wordWithTashkeel
+              : applySmartPartialTashkeel(currentQuestion.card.wordWithTashkeel)}
           </p>
 
           <div className="flex flex-wrap items-center justify-center gap-2.5">
@@ -660,6 +662,7 @@ interface MatchPairItem {
   partOfSpeech?: string;
   englishMeaning: string;
   isUserCard: boolean;
+  hasCustomEdits?: boolean;
 }
 
 interface SpeedMatchGameProps {
@@ -698,6 +701,7 @@ export function SpeedMatchGame({
         partOfSpeech: card.partOfSpeech,
         englishMeaning: card.englishMeaning,
         isUserCard: true,
+        hasCustomEdits: card.hasCustomEdits,
       }));
 
     const usedMeanings = new Set(picked.map((p) => p.englishMeaning.trim().toLowerCase()));
@@ -781,14 +785,15 @@ export function SpeedMatchGame({
     speakArabic(pair.wordWithTashkeel, {
       rate: speechRate,
       mode: 'word',
-      vocalizedText:
-        pair.vocalizedWord ||
-        getLexiconSpeechText(
-          pair.word,
-          pair.wordWithTashkeel,
-          pair.wordType,
-          pair.partOfSpeech
-        ),
+      vocalizedText: pair.hasCustomEdits
+        ? pair.wordWithTashkeel
+        : pair.vocalizedWord ||
+          getLexiconSpeechText(
+            pair.word,
+            pair.wordWithTashkeel,
+            pair.wordType,
+            pair.partOfSpeech
+          ),
       meaningHint: pair.englishMeaning,
       wordType: pair.wordType,
       partOfSpeech: pair.partOfSpeech,
@@ -914,7 +919,9 @@ export function SpeedMatchGame({
                     }`}
                   >
                     <span className="font-arabic-scheherazade text-2xl font-bold leading-normal">
-                      {applySmartPartialTashkeel(item.wordWithTashkeel)}
+                      {item.hasCustomEdits
+                        ? item.wordWithTashkeel
+                        : applySmartPartialTashkeel(item.wordWithTashkeel)}
                     </span>
                     {isMatched ? (
                       <CheckCircle2 className="h-4 w-4 shrink-0 text-[#2D3B22]" aria-hidden="true" />

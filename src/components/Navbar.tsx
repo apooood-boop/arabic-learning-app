@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
+  Crown,
   Feather,
   Flame,
   History,
@@ -11,11 +12,12 @@ import {
   NotebookPen,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Target,
   WifiOff,
 } from 'lucide-react';
 import { ActiveTab, AuthUser, VocabCard } from '../types/arabic';
-import { getUserInitials } from '../utils/auth';
+import { getUserInitials, isAdminUser, isPrimaryOwnerEmail } from '../utils/auth';
 import { computeWordsToday, GOAL_PRESETS } from './DailyGoalCard';
 import { PWAInstallButton } from './PWAInstallButton';
 import type { DailyStudyLog } from './WeeklyVocabChart';
@@ -33,6 +35,7 @@ interface NavbarProps {
   canAddContent: boolean;
   onOpenAuth: (mode?: 'login' | 'register') => void;
   onOpenAddLesson: () => void;
+  onOpenUserManagement?: () => void;
   onLogout: () => void;
   notesCount: number;
   onOpenNotes: () => void;
@@ -54,6 +57,7 @@ export function Navbar({
   canAddContent,
   onOpenAuth,
   onOpenAddLesson,
+  onOpenUserManagement,
   onLogout,
   notesCount,
   onOpenNotes,
@@ -248,14 +252,47 @@ export function Navbar({
                     {currentUser.name}
                   </p>
                   <p className="text-xs text-[#5A6552] truncate">{currentUser.email}</p>
-                  <p className="mt-1 font-arabic-cairo text-[11px] font-semibold text-[#9A6F14]">
-                    {currentUser.isGuest
-                      ? 'Guest Demo Session · جلسة تجريبية'
-                      : 'Personal Account · حساب شخصي'}
-                  </p>
+                  {isPrimaryOwnerEmail(currentUser.email) ? (
+                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-[#FACC15]/60 bg-[#16200F] px-2 py-0.5 text-[10px] font-bold text-[#FACC15]">
+                      <Crown className="h-3 w-3" aria-hidden="true" />
+                      <span>المالك الرئيسي / Primary Admin</span>
+                    </span>
+                  ) : isAdminUser(currentUser) ? (
+                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-[#EEF2E9] px-2 py-0.5 text-[10px] font-bold text-[#2D3B22]">
+                      <ShieldCheck className="h-3 w-3 text-[#3B4D2B]" aria-hidden="true" />
+                      <span>أدمن · Admin</span>
+                    </span>
+                  ) : currentUser.role === 'moderator' ? (
+                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-[#FBF3DC] px-2 py-0.5 text-[10px] font-bold text-[#9A6F14]">
+                      <span>مشرف · Moderator</span>
+                    </span>
+                  ) : (
+                    <p className="mt-1 font-arabic-cairo text-[11px] font-semibold text-[#9A6F14]">
+                      {currentUser.isGuest
+                        ? 'Guest Demo Session · جلسة تجريبية'
+                        : 'طالب · Student Account'}
+                    </p>
+                  )}
                 </div>
 
                 <div className="pt-1.5 space-y-1">
+                  {isAdminUser(currentUser) && onOpenUserManagement && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onOpenUserManagement();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] transition-colors cursor-pointer"
+                    >
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#16200F] text-[#FACC15]">
+                        <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                      </span>
+                      <span className="truncate">الإدارة · Admin Panel</span>
+                    </button>
+                  )}
+
                   {canAddContent && (
                     <button
                       type="button"
@@ -507,6 +544,21 @@ export function Navbar({
               </div>
             )}
           </div>
+
+          {isAdminUser(currentUser) && onOpenUserManagement && (
+            <button
+              type="button"
+              onClick={onOpenUserManagement}
+              title="لوحة الإدارة والفحص الذكي · Admin Panel"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[#FACC15]/60 bg-[#16200F] px-2.5 py-1.5 text-xs font-bold text-[#FEF08A] hover:bg-[#233018] hover:border-[#FACC15] transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15]"
+            >
+              <ShieldCheck className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+              <span dir="rtl" lang="ar" className="font-arabic-cairo">
+                الإدارة
+              </span>
+              <span className="hidden lg:inline text-[11px] text-[#DCE5D3]">/ Admin</span>
+            </button>
+          )}
 
           <PWAInstallButton variant="header" />
 

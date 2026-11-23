@@ -5,6 +5,8 @@ import {
   formatMinimalArabicRoot,
   inferArabicWordType,
   normalizeArabicWord,
+  normalizeStandaloneArabicKey,
+  normalizeStandaloneVocabWord,
   stripFinalIrabForSpeech,
   stripTashkeel,
 } from '../utils/arabic.ts';
@@ -824,7 +826,14 @@ function stripCommonPrefixes(normalized: string): string[] {
 
 export function findExactLexiconMatch(rawWord: string): LexiconEntry | null {
   const normalized = normalizeArabicWord(rawWord.trim());
-  const candidates = stripCommonPrefixes(normalized);
+  const standalone = normalizeStandaloneArabicKey(rawWord.trim());
+  const candidates = [
+    ...new Set([
+      ...stripCommonPrefixes(normalized),
+      ...stripCommonPrefixes(standalone),
+      `${standalone}ا`,
+    ]),
+  ];
 
   for (const candidate of candidates) {
     const match = RAW_LEXICON[candidate];
@@ -838,15 +847,20 @@ export function findExactLexiconMatch(rawWord: string): LexiconEntry | null {
     }
   }
 
-  const withAlKey = `ال${normalized}`;
-  const withAl = RAW_LEXICON[withAlKey];
-  if (!withAl) return null;
-  const meta = LEXICON_WORD_META[withAlKey];
-  return {
-    ...withAl,
-    wordType: meta?.wordType ?? inferArabicWordType(withAl.partOfSpeech),
-    root: meta?.root ?? '',
-  };
+  for (const base of new Set([normalized, standalone])) {
+    const withAlKey = `ال${base}`;
+    const withAl = RAW_LEXICON[withAlKey];
+    if (withAl) {
+      const meta = LEXICON_WORD_META[withAlKey];
+      return {
+        ...withAl,
+        wordType: meta?.wordType ?? inferArabicWordType(withAl.partOfSpeech),
+        root: meta?.root ?? '',
+      };
+    }
+  }
+
+  return null;
 }
 
 export function enrichWordMeta(
@@ -1079,56 +1093,53 @@ function selectLevelMatchedExamples(
   }));
 }
 
+function stripStandaloneTransliterationCase(
+  translit: string,
+  originalAr: string,
+  standaloneAr: string
+): string {
+  if (!translit || stripTashkeel(originalAr) === stripTashkeel(standaloneAr)) {
+    return translit;
+  }
+  // If accusative -an (or -un/-in) tanween ending was normalized off the Arabic noun, clean transliteration too
+  return translit.replace(/(an|un|in)$/i, '').trim() || translit;
+}
+
 export function lookupFallbackWord(
   rawWord: string,
   contextSentence?: string,
   notice?: string,
   level: ProficiencyLevel = 'intermediate'
-): WordAnalysis {
+): WordAnalysis | null {
   const cleanOriginal = rawWord.trim();
   const match = findExactLexiconMatch(cleanOriginal);
 
-  if (match) {
-    const resolvedWordType = match.wordType || inferArabicWordType(match.partOfSpeech);
-    return {
-      word: cleanOriginal,
-      ...match,
-      wordWithTashkeel: applySmartPartialTashkeel(match.wordWithTashkeel),
-      vocalizedWord: stripFinalIrabForSpeech(match.wordWithTashkeel, {
-        wordType: resolvedWordType,
-        partOfSpeech: match.partOfSpeech,
-      }),
-      wordType: resolvedWordType,
-      root: formatMinimalArabicRoot(match.root),
-      examples: selectLevelMatchedExamples(match, contextSentence, level),
-      level,
-      source: 'lexicon',
-      notice,
-    };
+  if (!match) {
+    return null;
   }
 
-  const displayWord = applySmartPartialTashkeel(cleanOriginal || stripTashkeel(rawWord));
-  const cleanMeaning = stripTashkeel(displayWord);
-
+  const resolvedWordType = match.wordType || inferArabicWordType(match.partOfSpeech);
+  const standaloneAr = normalizeStandaloneVocabWord(match.wordWithTashkeel, {
+    wordType: resolvedWordType,
+    partOfSpeech: match.partOfSpeech,
+  });
+  const finalWordAr = applySmartPartialTashkeel(standaloneAr || match.wordWithTashkeel);
   return {
-    word: cleanOriginal,
-    wordWithTashkeel: displayWord,
-    vocalizedWord: stripFinalIrabForSpeech(cleanOriginal || displayWord, {
-      wordType: 'اسم',
-      partOfSpeech: 'Arabic Lexeme',
+    ...match,
+    word: stripTashkeel(finalWordAr),
+    wordWithTashkeel: finalWordAr,
+    vocalizedWord: stripFinalIrabForSpeech(match.wordWithTashkeel, {
+      wordType: resolvedWordType,
+      partOfSpeech: match.partOfSpeech,
     }),
-    partOfSpeech: 'Arabic Lexeme',
-    wordType: 'اسم',
-    root: '',
-    transliteration: stripTashkeel(displayWord),
-    englishMeaning: `Contextual Arabic word (${cleanMeaning})`,
-    examples: buildLevelFallbackExamples(
-      displayWord,
-      cleanMeaning,
-      'اسم',
-      contextSentence,
-      level
+    transliteration: stripStandaloneTransliterationCase(
+      match.transliteration,
+      match.wordWithTashkeel,
+      finalWordAr
     ),
+    wordType: resolvedWordType,
+    root: formatMinimalArabicRoot(match.root),
+    examples: selectLevelMatchedExamples(match, contextSentence, level),
     level,
     source: 'lexicon',
     notice,
