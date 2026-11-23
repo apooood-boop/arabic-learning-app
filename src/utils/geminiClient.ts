@@ -740,10 +740,26 @@ Return JSON with:
           code = 'AUTH_ERROR';
         }
 
-        if (curatedMatch) {
-          return { ...curatedMatch, notice: userMessage };
-        }
-        throw new GeminiTranslationError(userMessage, { status: response.status, code });
+        const fallbackResult: WordAnalysis = curatedMatch || {
+          word: stripTashkeel(trimmedWord),
+          wordWithTashkeel: applySmartPartialTashkeel(trimmedWord),
+          vocalizedWord: stripFinalIrabForSpeech(trimmedWord),
+          partOfSpeech: 'Word',
+          wordType: inferArabicWordType(trimmedWord),
+          root: formatMinimalArabicRoot(trimmedWord),
+          transliteration: '',
+          englishMeaning: `Contextual translation for "${trimmedWord}"`,
+          examples: [
+            {
+              arabic: applySmartPartialTashkeel(trimmedContext),
+              english: `Contextual example sentence for "${trimmedWord}".`,
+            },
+          ],
+          level: targetLevel,
+          source: 'lexicon',
+          notice: `Translation fallback (HTTP ${response.status}: API authentication/quota status).`,
+        };
+        return { ...fallbackResult, notice: userMessage };
       }
 
       const payload = (await response.json()) as {

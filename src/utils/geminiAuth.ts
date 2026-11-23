@@ -32,29 +32,21 @@ export async function fetchGeminiGenerateContent(params: {
   signal?: AbortSignal;
   logPrefix?: string;
 }): Promise<GeminiRestResult> {
-  const cleanKey = (params.apiKey || getClientGeminiApiKey() || '').trim();
   const logPrefix = params.logPrefix || 'Gemini API';
   const cleanModel = (params.model || 'gemini-2.5-flash').replace(/^models\//, '');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent`;
-  const bodyJson = JSON.stringify(params.payload);
-  const isAuthToken = cleanKey.startsWith('AQ.');
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  if (isAuthToken) {
-    headers['Authorization'] = `Bearer ${cleanKey}`;
-  } else if (cleanKey) {
-    headers['x-goog-api-key'] = cleanKey;
-  }
+  const url = '/api/gemini/generateContent';
 
   try {
     const res = await fetch(url, {
       method: 'POST',
       signal: params.signal,
-      headers,
-      body: bodyJson,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: cleanModel,
+        payload: params.payload,
+      }),
     });
 
     if (res.ok) {
@@ -74,13 +66,13 @@ export async function fetchGeminiGenerateContent(params: {
 
     const detailMsg = errorMessage || errorBody || res.statusText;
     console.error(
-      `[${logPrefix}] Request to ${url} failed (HTTP ${res.status}): ${detailMsg}`
+      `[${logPrefix}] Server Gemini proxy failed (HTTP ${res.status}): ${detailMsg}`
     );
 
     return { response: res, errorBody, errorMessage, url };
   } catch (err) {
     const errorBody = err instanceof Error ? err.message : String(err);
-    console.error(`[${logPrefix}] Network error contacting ${url}:`, errorBody);
+    console.error(`[${logPrefix}] Network error contacting server Gemini proxy:`, errorBody);
     return {
       response: new Response(JSON.stringify({ error: { message: errorBody } }), { status: 500 }),
       errorBody,

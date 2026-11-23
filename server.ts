@@ -2113,16 +2113,22 @@ app.post('/api/gemini/generateContent', async (req, res) => {
     return res.status(500).json({ error: 'Server Gemini API key not configured.' });
   }
 
-  const modelName = model || 'gemini-3.1-flash-lite';
+  const modelName = model || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (apiKey.startsWith('AQ.')) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    } else {
+      headers['x-goog-api-key'] = apiKey;
+    }
+
     const upstream = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
+      headers,
       body: JSON.stringify(payload || {}),
     });
 
