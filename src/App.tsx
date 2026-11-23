@@ -34,6 +34,7 @@ import { ReadingHistoryView } from './components/ReadingHistoryView';
 import { VocabularyView } from './components/VocabularyView';
 import { DailyStudyLog, WeeklyVocabChart } from './components/WeeklyVocabChart';
 import { ActiveWordSelection, WordContextMenu } from './components/WordContextMenu';
+import { lookupFallbackWord } from './data/fallbackLexicon';
 import { SAMPLE_LESSONS } from './data/lessons';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import {
@@ -60,6 +61,7 @@ import {
   normalizeArabicWord,
   stripTashkeel,
 } from './utils/arabic';
+import { analyzeArabicWordClient } from './utils/geminiClient';
 
 const DEFAULT_PREFERENCES: ReaderPreferences = {
   showTashkeel: true,
@@ -573,28 +575,12 @@ export default function App() {
     }
 
     const requestPromise = (async () => {
-      const response = await fetch('/api/word/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          word: selection.word,
-          contextSentence: selection.contextSentence,
-          level: targetLevel,
-        }),
+      const analysis = await analyzeArabicWordClient({
+        word: selection.word,
+        contextSentence: selection.contextSentence,
+        level: targetLevel,
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        if (data?.fallback) {
-          setApiNotice(data.error || 'Using built-in Arabic lexicon.');
-          return data.fallback as WordAnalysis;
-        }
-        throw new Error(data?.error || 'Could not analyze word.');
-      }
-
-      const analysis = data as WordAnalysis;
       if (analysis.notice) {
         setApiNotice(analysis.notice);
       }
@@ -627,7 +613,7 @@ export default function App() {
       setWordAnalysis(null);
       // Speculative prefetch while user chooses Translate or Add to Vocabulary
       void fetchWordAnalysis(selection).catch(() => {
-        // Handled explicitly if user triggers action
+        // Fallback handled on action
       });
     }
   };
@@ -656,21 +642,31 @@ export default function App() {
     try {
       const result = await fetchWordAnalysis(wordSelection);
       setWordAnalysis(result);
-    } catch (err) {
-      setAnalysisError(
-        err instanceof Error ? err.message : 'Unable to translate this word.'
+    } catch {
+      const fallback = lookupFallbackWord(
+        wordSelection.word,
+        wordSelection.contextSentence,
+        undefined,
+        targetLevel
       );
+      setWordAnalysis(fallback);
+      setAnalysisCache((prev) => ({ ...prev, [cacheKey]: fallback }));
     } finally {
       setAnalysisLoading(false);
     }
   };
 
-  const handleAddToVocabulary = async () => {
+  const handleAddToVocabulary = () => {
     if (!wordSelection) return;
     recordStudyActivity();
     const normalizedKey = normalizeArabicWord(wordSelection.word);
     const sourceLevel: ProficiencyLevel =
       wordSelection.lessonLevel ?? activeLesson?.level ?? selectedLevel;
+    const cacheKey = getCacheKey(
+      wordSelection.word,
+      wordSelection.contextSentence,
+      sourceLevel
+    );
 
     if (vocabStatusMap.has(normalizedKey)) {
       setJustSaved(true);
@@ -684,34 +680,69 @@ export default function App() {
       return;
     }
 
-    setSavingVocab(true);
-    setAnalysisError(null);
-    try {
-      const result = wordAnalysis ?? (await fetchWordAnalysis(wordSelection));
-      setWordAnalysis(result);
-
-      const newCard: VocabCard = {
-        ...result,
-        id: `vocab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        normalizedKey,
-        lessonId: activeLesson?.id,
-        lessonTitle: activeLesson?.titleEn,
-        level: result.level ?? sourceLevel,
-        vocalizedWord: result.vocalizedWord,
-        status: 'needs_review',
-        createdAt: Date.now(),
-      };
-
-      setVocabCards((prev) => [newCard, ...prev]);
-      recordStudyActivity('added');
-      setJustSaved(true);
-      setPopoverMode('translation');
-    } catch (err) {
-      setAnalysisError(
-        err instanceof Error ? err.message : 'Failed to generate flashcard.'
+    // Immediate local word saving using cached analysis or instant built-in lexicon baseline
+    const instantAnalysis =
+      analysisCache[cacheKey] ??
+      wordAnalysis ??
+      lookupFallbackWord(
+        wordSelection.word,
+        wordSelection.contextSentence,
+        undefined,
+        sourceLevel
       );
-    } finally {
-      setSavingVocab(false);
+
+    const newCardId = `vocab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newCard: VocabCard = {
+      ...instantAnalysis,
+      id: newCardId,
+      normalizedKey,
+      lessonId: activeLesson?.id,
+      lessonTitle: activeLesson?.titleEn,
+      level: instantAnalysis.level ?? sourceLevel,
+      vocalizedWord: instantAnalysis.vocalizedWord,
+      status: 'needs_review',
+      createdAt: Date.now(),
+    };
+
+    setVocabCards((prev) => [newCard, ...prev]);
+    setWordAnalysis(instantAnalysis);
+    setAnalysisError(null);
+    setSavingVocab(false);
+    recordStudyActivity('added');
+    setJustSaved(true);
+    setPopoverMode('translation');
+
+    // Background AI enrichment: upgrades the saved card seamlessly if Gemini responds with richer contextual data
+    if (instantAnalysis.source !== 'gemini' && instantAnalysis.source !== 'cache') {
+      const capturedSelection = wordSelection;
+      void fetchWordAnalysis(capturedSelection)
+        .then((enriched) => {
+          if (enriched.source === 'gemini') {
+            setVocabCards((prev) =>
+              prev.map((card) =>
+                card.id === newCardId
+                  ? {
+                      ...card,
+                      ...enriched,
+                      id: card.id,
+                      normalizedKey: card.normalizedKey,
+                      lessonId: card.lessonId,
+                      lessonTitle: card.lessonTitle,
+                      level: enriched.level ?? card.level,
+                      status: card.status,
+                      createdAt: card.createdAt,
+                    }
+                  : card
+              )
+            );
+            setWordAnalysis((curr) =>
+              curr && normalizeArabicWord(curr.word) === normalizedKey ? enriched : curr
+            );
+          }
+        })
+        .catch(() => {
+          // Local baseline card is already safely stored in localStorage
+        });
     }
   };
 

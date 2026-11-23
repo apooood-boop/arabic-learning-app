@@ -94,21 +94,6 @@ export default defineConfig(() => {
                 },
               },
             },
-            {
-              urlPattern: /\/api\/word\/analyze/i,
-              handler: 'NetworkFirst',
-              options: {
-                cacheName: 'qalam-api-word-cache',
-                networkTimeoutSeconds: 4,
-                expiration: {
-                  maxEntries: 150,
-                  maxAgeSeconds: 60 * 60 * 24 * 30,
-                },
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
           ],
         },
         devOptions: {

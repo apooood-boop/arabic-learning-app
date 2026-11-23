@@ -20,7 +20,6 @@ import {
 import {
   Lesson,
   LessonQuizQuestion,
-  LessonQuizResponse,
   NoteContextTag,
   ReaderPreferences,
   ReadingHistoryItem,
@@ -42,6 +41,7 @@ import {
   tokenizeArabicParagraph,
   unlockArabicAudioContext,
 } from '../utils/arabic';
+import { generateLessonQuizClient } from '../utils/geminiClient';
 import { ActiveWordSelection } from './WordContextMenu';
 import { YouTubePlayer, VideoTimeSyncInfo } from './YouTubePlayer';
 
@@ -669,23 +669,12 @@ export function LessonReader({
     setQuizError(null);
     setSelectedAnswers({});
     try {
-      const response = await fetch('/api/lesson/quiz', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          lessonId: lesson.id,
-          titleEn: lesson.titleEn,
-          textAr: lesson.textAr,
-          level: lesson.level,
-        }),
+      const typed = await generateLessonQuizClient({
+        lessonId: lesson.id,
+        titleEn: lesson.titleEn,
+        textAr: lesson.textAr,
+        level: lesson.level,
       });
-      const data = await response.json();
-      if (!response.ok || !Array.isArray(data?.questions)) {
-        throw new Error(data?.error || 'Could not generate comprehension quiz.');
-      }
-      const typed = data as LessonQuizResponse;
       setQuizQuestions(typed.questions);
       setQuizSource(typed.source);
     } catch (err) {

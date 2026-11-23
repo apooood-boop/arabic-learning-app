@@ -29,6 +29,7 @@ import {
   stripTashkeel,
   unlockArabicAudioContext,
 } from '../utils/arabic';
+import { generateConversationClient } from '../utils/geminiClient';
 
 interface ConversationViewProps {
   cards: VocabCard[];
@@ -166,30 +167,20 @@ export function ConversationView({
       englishMeaning: c.englishMeaning,
     }));
 
+    const fallbackBuilder = () =>
+      buildClientFallbackConversation(convLevel, scenarioId, customTopic.trim(), cards);
+
     try {
-      const response = await fetch('/api/conversation/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          level: convLevel,
-          scenarioId,
-          customTopic: customTopic.trim() || undefined,
-          words: wordsPayload,
-        }),
+      const data = await generateConversationClient({
+        level: convLevel,
+        scenarioId,
+        customTopic: customTopic.trim() || undefined,
+        words: wordsPayload,
+        fallbackBuilder,
       });
-      const contentType = (response.headers.get('content-type') || '').toLowerCase();
-      if (!response.ok || !contentType.includes('application/json')) {
-        throw new Error('Conversation API unavailable.');
-      }
-      const data = (await response.json()) as GeneratedConversation;
-      if (!Array.isArray(data?.turns) || data.turns.length === 0) {
-        throw new Error('Empty dialogue.');
-      }
       setConversation(data);
     } catch {
-      setConversation(
-        buildClientFallbackConversation(convLevel, scenarioId, customTopic.trim(), cards)
-      );
+      setConversation(fallbackBuilder());
     } finally {
       setLoading(false);
     }

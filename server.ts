@@ -38,13 +38,29 @@ const serverWordCache = new Map<string, WordAnalysis>();
 const MAX_CACHE_ENTRIES = 500;
 
 function getConfiguredApiKey(): string | null {
-  const key =
+  const key = (
     process.env.GEMINI_API_KEY?.trim() ||
-    process.env.VITE_GEMINI_API_KEY?.trim();
+    process.env.VITE_GEMINI_API_KEY?.trim() ||
+    ''
+  ).trim();
   if (!key || key === 'MY_GEMINI_API_KEY') {
     return null;
   }
   return key;
+}
+
+function createServerGeminiClient(apiKey: string): GoogleGenAI {
+  const cleanKey = apiKey.trim();
+  const headers: Record<string, string> = {
+    'User-Agent': 'aistudio-build',
+  };
+  if (cleanKey.startsWith('AQ.')) {
+    headers.Authorization = `Bearer ${cleanKey}`;
+  }
+  return new GoogleGenAI({
+    apiKey: cleanKey,
+    httpOptions: { headers },
+  });
 }
 
 function setServerCache(cacheKey: string, value: WordAnalysis) {
@@ -115,14 +131,7 @@ app.post('/api/word/analyze', async (req, res) => {
   }
 
   try {
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    const ai = createServerGeminiClient(apiKey);
 
     const prompt = `Analyze this Arabic word for a ${targetLevel} learner.
 Word: "${trimmedWord}"
@@ -317,14 +326,7 @@ app.post('/api/lesson/quiz', async (req, res) => {
   }
 
   try {
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    const ai = createServerGeminiClient(apiKey);
 
     const prompt = `Create exactly 3 multiple-choice reading comprehension questions based strictly on this Arabic passage for a ${level || 'intermediate'} learner.
 
@@ -958,10 +960,7 @@ app.post('/api/lesson/process', async (req, res) => {
 
       if (apiKey && parsedFromPaste.length > 0) {
         try {
-          const ai = new GoogleGenAI({
-            apiKey,
-            httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-          });
+          const ai = createServerGeminiClient(apiKey);
 
           const BATCH_SIZE = 16;
           const batches: TranscriptSegment[][] = [];
@@ -1083,10 +1082,7 @@ ${batchIdx === 0 ? '- Also provide descriptionEn: a concise 1-sentence English s
 
       if (apiKey) {
         try {
-          const ai = new GoogleGenAI({
-            apiKey,
-            httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-          });
+          const ai = createServerGeminiClient(apiKey);
 
           // Process ALL segments across the entire video in batches so timestamps stay 1:1
           const BATCH_SIZE = 16;
@@ -1216,10 +1212,7 @@ ${batchIdx === 0 ? '- Also include descriptionEn: a concise 1-sentence English s
 
   if (apiKey) {
     try {
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-      });
+      const ai = createServerGeminiClient(apiKey);
 
       const prompt = `Apply Smart Partial Tashkeel (التشكيل الجزئي الذكي) to the following Arabic reading passage for a ${targetLevel} learner without changing any words or meaning.
 
@@ -1406,14 +1399,7 @@ app.get('/api/tts', async (req, res) => {
 
   if (canAttemptGeminiTts && apiKey) {
     try {
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
+      const ai = createServerGeminiClient(apiKey);
 
       const ttsTimeout = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('TTS_TIMEOUT')), mode === 'word' ? 4500 : 6000)
@@ -1461,6 +1447,7 @@ app.get('/api/tts', async (req, res) => {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error('[TTS Server] Gemini TTS request failed:', msg);
       if (isGeminiQuotaError(msg)) {
         const cooldownMs = extractQuotaCooldownMs(msg);
         geminiTtsCooldownUntil = Date.now() + cooldownMs;
@@ -1675,10 +1662,7 @@ app.post('/api/exams/generate', async (req, res) => {
   }
 
   try {
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-    });
+    const ai = createServerGeminiClient(apiKey);
 
     const wordsSummary =
       cleanWords.length > 0
@@ -1958,10 +1942,7 @@ app.post('/api/conversation/generate', async (req, res) => {
   }
 
   try {
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-    });
+    const ai = createServerGeminiClient(apiKey);
 
     const wordsInstruction =
       cleanWords.length > 0

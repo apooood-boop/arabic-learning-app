@@ -1,4 +1,8 @@
 import type { ArabicFontStyle, ProficiencyLevel, TranscriptSegment } from '../types/arabic.ts';
+import {
+  fetchGeminiGenerateContent,
+  getClientGeminiApiKey as getSharedClientGeminiApiKey,
+} from './geminiAuth.ts';
 
 const TASHKEEL_REGEX = /[\u064B-\u065F\u0670\u06D6-\u06ED]/g;
 const ARABIC_CHAR_REGEX = /[\u0600-\u06FF]/;
@@ -895,7 +899,33 @@ let activeEndCallback: (() => void) | null = null;
 const clientTtsAudioCache = new Map<string, { buffer: ArrayBuffer; contentType: string }>();
 const MAX_CLIENT_TTS_CACHE = 200;
 const CLIENT_GEMINI_COOLDOWN_KEY = 'qalam_gemini_tts_cooldown_until';
+const CLIENT_GEMINI_REJECTED_KEY = 'qalam_gemini_tts_rejected_reason';
+const STATIC_API_TTS_UNAVAILABLE_KEY = 'qalam_static_tts_unavailable';
 let clientGeminiTtsCooldownUntil = 0;
+let clientGeminiRejectedReason: string | null = null;
+let staticApiTtsUnavailable = false;
+
+function isStaticApiTtsUnavailable(): boolean {
+  if (staticApiTtsUnavailable) return true;
+  try {
+    if (window.sessionStorage?.getItem(STATIC_API_TTS_UNAVAILABLE_KEY) === '1') {
+      staticApiTtsUnavailable = true;
+      return true;
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return false;
+}
+
+function markStaticApiTtsUnavailable(): void {
+  staticApiTtsUnavailable = true;
+  try {
+    window.sessionStorage?.setItem(STATIC_API_TTS_UNAVAILABLE_KEY, '1');
+  } catch {
+    // Ignore storage access errors
+  }
+}
 
 function getClientGeminiCooldownUntil(): number {
   if (clientGeminiTtsCooldownUntil > Date.now()) return clientGeminiTtsCooldownUntil;
@@ -912,11 +942,31 @@ function getClientGeminiCooldownUntil(): number {
   return 0;
 }
 
-function setClientGeminiCooldown(durationMs: number): void {
+function getClientGeminiRejectedReason(): string | null {
+  if (clientGeminiRejectedReason) return clientGeminiRejectedReason;
+  try {
+    const raw = window.sessionStorage?.getItem(CLIENT_GEMINI_REJECTED_KEY);
+    if (raw) {
+      clientGeminiRejectedReason = raw;
+      return raw;
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return null;
+}
+
+function setClientGeminiCooldown(durationMs: number, rejectedReason?: string): void {
   const until = Date.now() + durationMs;
   clientGeminiTtsCooldownUntil = until;
+  if (rejectedReason) {
+    clientGeminiRejectedReason = rejectedReason;
+  }
   try {
     window.sessionStorage?.setItem(CLIENT_GEMINI_COOLDOWN_KEY, String(until));
+    if (rejectedReason) {
+      window.sessionStorage?.setItem(CLIENT_GEMINI_REJECTED_KEY, rejectedReason);
+    }
   } catch {
     // Ignore storage errors
   }
@@ -931,19 +981,7 @@ function setClientTtsCache(key: string, value: { buffer: ArrayBuffer; contentTyp
 }
 
 function getClientViteGeminiApiKey(): string | null {
-  try {
-    const metaEnv =
-      typeof import.meta !== 'undefined'
-        ? (import.meta as unknown as { env?: Record<string, string | undefined> }).env
-        : undefined;
-    const raw =
-      metaEnv?.VITE_GEMINI_API_KEY?.trim() ||
-      metaEnv?.VITE_API_KEY?.trim();
-    if (!raw || raw === 'MY_GEMINI_API_KEY') return null;
-    return raw;
-  } catch {
-    return null;
-  }
+  return getSharedClientGeminiApiKey();
 }
 
 function getOrCreateAudioContext(): AudioContext | null {
@@ -1067,9 +1105,11 @@ function scoreArabicVoice(voice: SpeechSynthesisVoice): number {
   if (!lang.startsWith('ar')) return -1;
 
   let score = 0;
-  if (lang === 'ar-sa') score += 30;
-  else if (lang === 'ar-001' || lang === 'ar-eg' || lang === 'ar-ae') score += 22;
-  else score += 12;
+  if (lang === 'ar-sa') score += 35;
+  else if (lang === 'ar-eg') score += 28;
+  else if (lang === 'ar-xa') score += 26;
+  else if (lang === 'ar-001' || lang === 'ar-ae') score += 24;
+  else score += 14;
 
   const name = voice.name.toLowerCase();
   if (/natural|neural|online/.test(name)) score += 50;
@@ -1079,8 +1119,16 @@ function scoreArabicVoice(voice: SpeechSynthesisVoice): number {
   return score;
 }
 
-function resolveArabicVoice(): SpeechSynthesisVoice | undefined {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return undefined;
+interface ArabicVoiceResolution {
+  voice: SpeechSynthesisVoice | undefined;
+  totalVoices: number;
+  hasArabicVoice: boolean;
+}
+
+function resolveArabicVoiceInfo(): ArabicVoiceResolution {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    return { voice: undefined, totalVoices: 0, hasArabicVoice: false };
+  }
   const voices = window.speechSynthesis.getVoices();
   if (voices.length > 0) {
     cachedVoices = voices;
@@ -1091,7 +1139,11 @@ function resolveArabicVoice(): SpeechSynthesisVoice | undefined {
     .filter((item) => item.score >= 0)
     .sort((a, b) => b.score - a.score);
 
-  return ranked[0]?.v;
+  return {
+    voice: ranked[0]?.v,
+    totalVoices: pool.length,
+    hasArabicVoice: ranked.length > 0,
+  };
 }
 
 function clearSpeechTimers() {
@@ -1254,10 +1306,15 @@ export function speakArabic(
     cb?.();
   };
 
+  let geminiDiag = 'Gemini TTS not attempted';
+  let voiceDiag = 'speechSynthesis voice check pending';
+
   const failAndNotify = (reason?: string) => {
     if (currentSpeechSession !== sessionId) return;
     const msg = reason || TTS_FAILED_MESSAGE;
-    console.error('[Qalam Audio] All Arabic TTS playback methods failed.', msg);
+    console.warn(
+      `[Qalam Audio] Spoken Arabic playback unavailable. Gemini status: ${geminiDiag} | Browser speechSynthesis status: ${voiceDiag}`
+    );
     notifyTtsNotice(msg, options);
     options.onError?.(msg);
     finalize();
@@ -1270,18 +1327,32 @@ export function speakArabic(
     const hasSpeechApi =
       'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
     if (!hasSpeechApi) {
-      console.warn('[Qalam Audio] Web Speech API (speechSynthesis) is not supported in this browser.');
+      voiceDiag = 'Web Speech API (speechSynthesis) is not supported in this browser';
+      console.warn(`[Qalam Audio] ${voiceDiag}. Gemini status: ${geminiDiag}`);
       return false;
     }
 
-    const arabicVoice = resolveArabicVoice();
+    const voiceInfo = resolveArabicVoiceInfo();
+
+    if (voiceInfo.hasArabicVoice && voiceInfo.voice) {
+      voiceDiag = `Using browser Arabic voice "${voiceInfo.voice.name}" (${voiceInfo.voice.lang})`;
+    } else if (voiceInfo.totalVoices > 0) {
+      voiceDiag = `No Arabic speechSynthesis voice installed among ${voiceInfo.totalVoices} browser voices (expected ar-SA, ar-EG, ar-XA, or ar-*)`;
+      console.warn(
+        `[Qalam Audio] Cannot use browser speechSynthesis: ${voiceDiag}. Gemini status: ${geminiDiag}`
+      );
+      return false;
+    } else {
+      voiceDiag =
+        'No speechSynthesis voices loaded yet (getVoices() returned empty); trying ar-SA fallback';
+    }
 
     try {
       const browserSpeechText = mode === 'sentence' ? karaokeText : ttsText;
       const utterance = new SpeechSynthesisUtterance(browserSpeechText);
-      utterance.lang = arabicVoice?.lang || 'ar-SA';
-      if (arabicVoice) {
-        utterance.voice = arabicVoice;
+      utterance.lang = voiceInfo.voice?.lang || 'ar-SA';
+      if (voiceInfo.voice) {
+        utterance.voice = voiceInfo.voice;
       }
       utterance.rate = effectiveRate;
       utterance.pitch = prosody.pitch;
@@ -1323,7 +1394,8 @@ export function speakArabic(
         if (event.error === 'interrupted' || event.error === 'canceled') {
           return;
         }
-        console.warn('[Qalam Audio] Web Speech API playback error:', event.error);
+        voiceDiag = `speechSynthesis error (${event.error})`;
+        console.warn(`[Qalam Audio] ${voiceDiag}. Gemini status: ${geminiDiag}`);
         activeUtterance = null;
         onUnavailableOrError();
       };
@@ -1338,7 +1410,8 @@ export function speakArabic(
         // Watchdog in case browser silently ignores speak() without firing onstart/onerror
         startWatchdogTimer = window.setTimeout(() => {
           if (currentSpeechSession !== sessionId || speechStarted) return;
-          console.warn('[Qalam Audio] Web Speech API did not start within 900ms, triggering fallback.');
+          voiceDiag = 'speechSynthesis did not start within 900ms (likely missing Arabic OS voice)';
+          console.warn(`[Qalam Audio] ${voiceDiag}. Gemini status: ${geminiDiag}`);
           activeUtterance = null;
           try {
             window.speechSynthesis.cancel();
@@ -1365,7 +1438,8 @@ export function speakArabic(
 
       return true;
     } catch (err) {
-      console.error('[Qalam Audio] Failed to initialize SpeechSynthesisUtterance:', err);
+      voiceDiag = `Failed to initialize SpeechSynthesisUtterance: ${err instanceof Error ? err.message : String(err)}`;
+      console.warn(`[Qalam Audio] ${voiceDiag}. Gemini status: ${geminiDiag}`);
       return false;
     }
   };
@@ -1382,7 +1456,31 @@ export function speakArabic(
         if (ctx.state === 'suspended') {
           await ctx.resume();
         }
-        const decoded = await ctx.decodeAudioData(audioBuffer.slice(0));
+
+        let decoded: AudioBuffer;
+        try {
+          decoded = await ctx.decodeAudioData(audioBuffer.slice(0));
+        } catch (decodeErr) {
+          // Manual RIFF/PCM fallback if browser decodeAudioData rejects raw 16-bit PCM WAV
+          const view = new DataView(audioBuffer);
+          const isRiff =
+            audioBuffer.byteLength > 44 &&
+            view.getUint8(0) === 0x52 &&
+            view.getUint8(1) === 0x49 &&
+            view.getUint8(2) === 0x46 &&
+            view.getUint8(3) === 0x46;
+          if (!isRiff) {
+            throw decodeErr;
+          }
+          const sampleRate = view.getUint32(24, true) || 24000;
+          const pcmBytes = new Int16Array(audioBuffer, 44);
+          decoded = ctx.createBuffer(1, pcmBytes.length, sampleRate);
+          const channel = decoded.getChannelData(0);
+          for (let i = 0; i < pcmBytes.length; i++) {
+            channel[i] = pcmBytes[i] / 32768;
+          }
+        }
+
         if (currentSpeechSession !== sessionId) return;
 
         const source = ctx.createBufferSource();
@@ -1429,7 +1527,7 @@ export function speakArabic(
     }
 
     // Fallback to Blob HTMLAudioElement if AudioContext decoding fails
-    const blob = new Blob([audioBuffer], { type: contentType || 'audio/mpeg' });
+    const blob = new Blob([audioBuffer], { type: contentType || 'audio/wav' });
     const objectUrl = URL.createObjectURL(blob);
     activeObjectUrl = objectUrl;
 
@@ -1497,7 +1595,7 @@ export function speakArabic(
       audio.onended = () => finalize();
       audio.onerror = () => {
         if (currentSpeechSession !== sessionId) return;
-        console.warn('[Qalam Audio] Direct Google TTS <audio> failed.');
+        console.warn('[Qalam Audio] Direct Google TTS <audio> stream was blocked or failed.');
         onErrorFallback();
       };
 
@@ -1505,7 +1603,7 @@ export function speakArabic(
       if (p && typeof p.catch === 'function') {
         p.catch((err) => {
           if (currentSpeechSession !== sessionId || started) return;
-          console.warn('[Qalam Audio] Direct Google TTS play() rejected:', err);
+          console.warn('[Qalam Audio] Direct Google TTS <audio> play() rejected:', err);
           onErrorFallback();
         });
       }
@@ -1513,6 +1611,104 @@ export function speakArabic(
     } catch {
       onErrorFallback();
     }
+  };
+
+  const requestGeminiTtsAudio = async (
+    apiKey: string,
+    textToSpeak: string,
+    signal: AbortSignal
+  ): Promise<{ buffer: ArrayBuffer; contentType: string } | null> => {
+    const requestModelAudio = async (model: string, promptStyle: boolean) => {
+      const partPayload = promptStyle
+        ? {
+            text:
+              mode === 'word'
+                ? `Pronounce ONLY this Arabic word clearly in natural pausal form without adding trailing case-ending vowels (سكون الوقف): ${textToSpeak}`
+                : `Read this Arabic text clearly in natural Modern Standard Arabic: ${textToSpeak}`,
+          }
+        : {
+            text: textToSpeak,
+            speechMetadata: {
+              style: prosody.style,
+            },
+          };
+
+      return fetchGeminiGenerateContent({
+        model,
+        apiKey,
+        signal,
+        logPrefix: 'Qalam Audio',
+        payload: {
+          contents: [
+            {
+              role: 'user',
+              parts: [partPayload],
+            },
+          ],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: 'Kore' },
+              },
+            },
+          },
+        },
+      });
+    };
+
+    // Prefer the canonical Gemini TTS model (`gemini-3.8-flash-lite-tts`), falling back to
+    // `gemini-2.5-flash-preview-tts` if an external key returns 404 NOT_FOUND for 3.8.
+    let result = await requestModelAudio('gemini-3.8-flash-lite-tts', false);
+    if (result.response.status === 404) {
+      result = await requestModelAudio('gemini-2.5-flash-preview-tts', true);
+    }
+
+    const geminiRes = result.response;
+    const errText = result.errorBody;
+
+    if (!geminiRes.ok) {
+      console.error(
+        `[Qalam Audio] Gemini TTS failed (HTTP ${geminiRes.status} ${geminiRes.statusText}):`,
+        errText
+      );
+      if (geminiRes.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(errText)) {
+        geminiDiag = 'VITE_GEMINI_API_KEY quota exceeded (HTTP 429 RESOURCE_EXHAUSTED)';
+        setClientGeminiCooldown(30 * 60 * 1000, geminiDiag);
+      } else if (
+        geminiRes.status === 401 ||
+        geminiRes.status === 403 ||
+        /API_KEY_INVALID|PERMISSION_DENIED/i.test(errText)
+      ) {
+        geminiDiag = `VITE_GEMINI_API_KEY rejected by Gemini API (HTTP ${geminiRes.status})`;
+        setClientGeminiCooldown(60 * 60 * 1000, geminiDiag);
+      } else {
+        geminiDiag = `Gemini TTS returned HTTP ${geminiRes.status}: ${errText.slice(0, 140)}`;
+      }
+      return null;
+    }
+
+    const json = (await geminiRes.json()) as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{
+            inlineData?: { data?: string; mimeType?: string };
+          }>;
+        };
+      }>;
+    };
+    const inlineData = json.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (!inlineData?.data) {
+      geminiDiag = 'Gemini API responded without audio inlineData';
+      console.warn(`[Qalam Audio] ${geminiDiag}; switching to fallback audio.`);
+      return null;
+    }
+
+    geminiDiag = 'Gemini TTS succeeded';
+    return {
+      buffer: decodeBase64AudioToWavBuffer(inlineData.data, inlineData.mimeType),
+      contentType: 'audio/wav',
+    };
   };
 
   const fetchAndPlayAiAudio = async (allowSpeechSynthesisFallback: boolean) => {
@@ -1536,120 +1732,75 @@ export function speakArabic(
 
     const controller = new AbortController();
     activeFetchController = controller;
-    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+    const timeoutMs = mode === 'word' ? 6000 : mode === 'example' ? 8000 : 12000;
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       let fetchedBuffer: ArrayBuffer | null = null;
-      let fetchedContentType = 'audio/mpeg';
+      let fetchedContentType = 'audio/wav';
 
-      // 1. Try full-stack backend proxy `/api/tts` (uses server GEMINI_API_KEY with quota circuit breaker + Google TTS stream)
-      try {
-        const params = new URLSearchParams({
-          q: cleanForUrl,
-          mode,
-          style: prosody.style,
-        });
-        const res = await fetch(`/api/tts?${params.toString()}`, {
-          signal: controller.signal,
-        });
-        const ct = (res.headers.get('content-type') || '').toLowerCase();
-
-        if (res.ok && ct.startsWith('audio/')) {
-          const buf = await res.arrayBuffer();
-          if (buf.byteLength > 100) {
-            fetchedBuffer = buf;
-            fetchedContentType = ct;
-          }
-        } else {
-          // On static deployments (e.g. Cloudflare Pages SPA fallback), /api/tts returns 404 or text/html
-          console.info(
-            `[Qalam Audio] /api/tts unavailable (status=${res.status}); trying fallback audio pipeline.`
+      // 1. Direct Gemini Audio / TTS FIRST when VITE_GEMINI_API_KEY is present and active
+      const clientGeminiKey = getClientViteGeminiApiKey();
+      if (!clientGeminiKey) {
+        geminiDiag = 'VITE_GEMINI_API_KEY is missing in environment';
+      } else if (Date.now() < getClientGeminiCooldownUntil()) {
+        geminiDiag = getClientGeminiRejectedReason() || 'Gemini TTS cooldown active';
+      } else {
+        try {
+          const geminiAudio = await requestGeminiTtsAudio(
+            clientGeminiKey,
+            cleanForUrl,
+            controller.signal
           );
+          if (geminiAudio) {
+            fetchedBuffer = geminiAudio.buffer;
+            fetchedContentType = geminiAudio.contentType;
+          }
+        } catch (geminiErr) {
+          if ((geminiErr as Error)?.name === 'AbortError') {
+            geminiDiag = `Direct Gemini TTS timed out after ${timeoutMs}ms`;
+            throw geminiErr;
+          }
+          geminiDiag = `Direct Gemini TTS network error (${geminiErr instanceof Error ? geminiErr.message : String(geminiErr)})`;
+          console.warn(`[Qalam Audio] ${geminiDiag}; falling back.`);
         }
-      } catch (serverErr) {
-        if ((serverErr as Error)?.name === 'AbortError') {
-          throw serverErr;
-        }
-        console.info(
-          '[Qalam Audio] /api/tts unavailable:',
-          serverErr instanceof Error ? serverErr.message : serverErr
-        );
       }
 
-      // 2. If /api/tts is unavailable (e.g., static Cloudflare Pages/Workers host) and VITE_GEMINI_API_KEY is set,
-      // call Gemini TTS REST API directly when not in quota cooldown
-      if (!fetchedBuffer && Date.now() >= getClientGeminiCooldownUntil()) {
-        const clientGeminiKey = getClientViteGeminiApiKey();
-        if (clientGeminiKey) {
-          try {
-            const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent?key=${encodeURIComponent(clientGeminiKey)}`;
-            const geminiRes = await fetch(geminiEndpoint, {
-              method: 'POST',
-              signal: controller.signal,
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                contents: [
-                  {
-                    role: 'user',
-                    parts: [
-                      {
-                        text: cleanForUrl,
-                        speechMetadata: {
-                          style: prosody.style,
-                        },
-                      },
-                    ],
-                  },
-                ],
-                generationConfig: {
-                  responseModalities: ['AUDIO'],
-                  speechConfig: {
-                    voiceConfig: {
-                      prebuiltVoiceConfig: { voiceName: 'Kore' },
-                    },
-                  },
-                },
-              }),
-            });
+      // 2. Fallback to backend `/api/tts` proxy when available (full-stack preview / Node host)
+      if (!fetchedBuffer && !isStaticApiTtsUnavailable()) {
+        try {
+          const params = new URLSearchParams({
+            q: cleanForUrl,
+            mode,
+            style: prosody.style,
+          });
+          const res = await fetch(`/api/tts?${params.toString()}`, {
+            signal: controller.signal,
+          });
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
 
-            if (!geminiRes.ok) {
-              const errText = await geminiRes.text().catch(() => '');
-              if (geminiRes.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(errText)) {
-                setClientGeminiCooldown(60 * 60 * 1000);
-                console.info('[Qalam Audio] Direct Gemini TTS quota reached; using browser speech synthesis.');
-              } else {
-                console.info(`[Qalam Audio] Direct Gemini TTS unavailable (${geminiRes.status}); falling back.`);
-              }
-            } else {
-              const json = (await geminiRes.json()) as {
-                candidates?: Array<{
-                  content?: {
-                    parts?: Array<{
-                      inlineData?: { data?: string; mimeType?: string };
-                    }>;
-                  };
-                }>;
-              };
-              const inlineData = json.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-              if (inlineData?.data) {
-                fetchedBuffer = decodeBase64AudioToWavBuffer(
-                  inlineData.data,
-                  inlineData.mimeType
-                );
-                fetchedContentType = 'audio/wav';
-              }
+          if (res.ok && ct.startsWith('audio/')) {
+            const buf = await res.arrayBuffer();
+            if (buf.byteLength > 100) {
+              fetchedBuffer = buf;
+              fetchedContentType = ct;
             }
-          } catch (geminiErr) {
-            if ((geminiErr as Error)?.name === 'AbortError') {
-              throw geminiErr;
+          } else {
+            if (res.status === 404 || res.status === 405 || !ct.startsWith('audio/')) {
+              markStaticApiTtsUnavailable();
             }
             console.info(
-              '[Qalam Audio] Direct Gemini TTS request failed, falling back:',
-              geminiErr instanceof Error ? geminiErr.message : geminiErr
+              `[Qalam Audio] /api/tts unavailable (status=${res.status}); trying browser speechSynthesis.`
             );
           }
+        } catch (serverErr) {
+          if ((serverErr as Error)?.name === 'AbortError') {
+            throw serverErr;
+          }
+          console.info(
+            '[Qalam Audio] /api/tts unavailable:',
+            serverErr instanceof Error ? serverErr.message : serverErr
+          );
         }
       }
 
@@ -1668,7 +1819,7 @@ export function speakArabic(
         return;
       }
 
-      // 3. Automatic fallback to Web Speech API (ar-SA / ar) when AI audio endpoints are unavailable
+      // 3. Smarter Web Speech API fallback (prefers ar-SA, ar-EG, ar-XA, or any ar* voice)
       if (allowSpeechSynthesisFallback) {
         const startedSpeech = tryBrowserSpeechSynthesis(() => {
           playDirectGoogleAudioTag(() => failAndNotify());
@@ -1676,6 +1827,7 @@ export function speakArabic(
         if (startedSpeech) return;
       }
 
+      // 4. Final direct audio stream attempt before reporting friendly diagnostic
       playDirectGoogleAudioTag(() => failAndNotify());
     } catch (err) {
       window.clearTimeout(timeoutId);
@@ -1685,8 +1837,7 @@ export function speakArabic(
       if (currentSpeechSession !== sessionId) return;
 
       console.info(
-        '[Qalam Audio] AI audio pipeline timed out or aborted, falling back to browser SpeechSynthesis:',
-        err instanceof Error ? err.message : err
+        `[Qalam Audio] AI audio pipeline interrupted (${err instanceof Error ? err.message : String(err)}); checking browser Arabic voices.`
       );
 
       if (allowSpeechSynthesisFallback) {
@@ -1703,12 +1854,13 @@ export function speakArabic(
   const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
 
   // Unified expressive pronunciation pipeline across standalone words, card examples, AND lesson reading passages:
-  // /api/tts -> VITE_GEMINI_API_KEY neural TTS -> unlocked AudioContext -> automatic Web Speech (ar-SA/ar) fallback.
+  // Direct VITE_GEMINI_API_KEY TTS -> unlocked AudioContext -> /api/tts -> Arabic speechSynthesis (ar-SA/ar-EG/ar-XA/ar*) -> <audio> fallback.
   if (isOnline) {
     void fetchAndPlayAiAudio(true);
     return true;
   }
 
+  geminiDiag = 'Browser appears offline (navigator.onLine === false)';
   const startedBrowserSpeech = tryBrowserSpeechSynthesis(
     () => {
       failAndNotify();

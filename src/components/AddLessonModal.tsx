@@ -21,6 +21,10 @@ import {
   extractYouTubeVideoId,
   parsePastedTranscriptSegments,
 } from '../utils/arabic';
+import {
+  fetchYouTubeOEmbedClient,
+  processLessonClient,
+} from '../utils/geminiClient';
 
 interface AddLessonModalProps {
   isOpen: boolean;
@@ -95,46 +99,19 @@ export function AddLessonModal({
     setCaptionNotice(null);
 
     try {
-      const response = await fetch('/api/lesson/youtube-captions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ youtubeUrl: cleanVideo }),
-      });
+      const data = await fetchYouTubeOEmbedClient(cleanVideo);
 
-      const data = (await response.json()) as {
-        ok?: boolean;
-        suggestedTitle?: string;
-        videoDurationSeconds?: number;
-        segmentCount?: number;
-        rawTranscriptText?: string;
-        message?: string;
-      };
-
-      if (typeof data.videoDurationSeconds === 'number' && data.videoDurationSeconds > 0) {
-        setDetectedDuration(data.videoDurationSeconds);
-      }
       if (!title.trim() && data.suggestedTitle?.trim()) {
         setTitle(data.suggestedTitle.trim());
       }
 
-      if (data.ok && data.rawTranscriptText?.trim()) {
-        setTextAr(data.rawTranscriptText.trim());
-        setCaptionStatus('fetched');
-        setCaptionNotice(
-          `تم استخراج الترجمة الحقيقية من يوتيوب (${data.segmentCount ?? ''} مقطعًا). سيتم تطبيق التشكيل الجزئي الذكي ومزامنة التوقيت عند النشر.`
-        );
-      } else {
-        setCaptionStatus('blocked');
-        setCaptionNotice(
-          data.message ||
-            'تعذّر استخراج الترجمة تلقائيًا من يوتيوب (قد تكون محجوبة أو غير متوفرة). يمكنك لصق نص الفيديو الحقيقي أدناه أو النشر كدرس فيديو بدون نص.'
-        );
-        window.requestAnimationFrame(() => transcriptBoxRef.current?.focus());
-      }
+      setCaptionStatus('blocked');
+      setCaptionNotice(data.message);
+      window.requestAnimationFrame(() => transcriptBoxRef.current?.focus());
     } catch {
       setCaptionStatus('blocked');
       setCaptionNotice(
-        'تعذّر الاتصال بجلب الترجمة التلقائية من يوتيوب. يمكنك لصق نص الفيديو الحقيقي في الصندوق أدناه.'
+        'يمكنك لصق نص الفيديو الحقيقي في الصندوق أدناه أو نشر الدرس كفيديو مباشرة.'
       );
       window.requestAnimationFrame(() => transcriptBoxRef.current?.focus());
     }
@@ -242,62 +219,45 @@ export function AddLessonModal({
         : 'Reading passage formatted with Smart Partial Tashkeel for interactive word lookup.';
 
     try {
-      const response = await fetch('/api/lesson/process', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contentType,
-          title: cleanTitle,
-          subtitle: cleanSubtitle,
-          level,
-          textAr: cleanText,
-          youtubeUrl: contentType === 'video' ? cleanVideo : undefined,
-        }),
+      const data = await processLessonClient({
+        contentType,
+        title: cleanTitle,
+        level,
+        textAr: cleanText,
+        youtubeUrl: contentType === 'video' ? cleanVideo : undefined,
+        estimatedDuration: detectedDuration,
       });
 
-      if (response.ok) {
-        const data = (await response.json()) as {
-          needsManualTranscript?: boolean;
-          message?: string;
-          formattedTextAr?: string;
-          transcriptSegments?: TranscriptSegment[];
-          videoDurationSeconds?: number;
-          description?: string;
-        };
+      if (typeof data.videoDurationSeconds === 'number' && data.videoDurationSeconds > 0) {
+        videoDurationSeconds = data.videoDurationSeconds;
+        setDetectedDuration(data.videoDurationSeconds);
+      }
 
-        if (typeof data.videoDurationSeconds === 'number' && data.videoDurationSeconds > 0) {
-          videoDurationSeconds = data.videoDurationSeconds;
-          setDetectedDuration(data.videoDurationSeconds);
-        }
+      // Strict No-Hallucination guard: if video has no transcript yet, guide user cleanly
+      if (contentType === 'video' && data.needsManualTranscript && !cleanText) {
+        setCaptionStatus('blocked');
+        setCaptionNotice(
+          data.message ||
+            'ألصق نص الفيديو الحقيقي أدناه أو انشر الفيديو بدون نص للتدرّب على الاستماع.'
+        );
+        setIsProcessing(false);
+        window.requestAnimationFrame(() => transcriptBoxRef.current?.focus());
+        return;
+      }
 
-        // Strict No-Hallucination guard: if YouTube blocked captions & user didn't paste one, ask cleanly
-        if (contentType === 'video' && data.needsManualTranscript && !cleanText) {
-          setCaptionStatus('blocked');
-          setCaptionNotice(
-            data.message ||
-              'تعذّر استخراج الترجمة تلقائيًا من يوتيوب (قد تكون محجوبة أو غير متوفرة). ألصق نص الفيديو الحقيقي أدناه أو انشر الفيديو بدون نص.'
-          );
-          setIsProcessing(false);
-          window.requestAnimationFrame(() => transcriptBoxRef.current?.focus());
-          return;
-        }
-
-        if (data.formattedTextAr?.trim()) {
-          formattedTextAr = applySmartPartialTashkeel(data.formattedTextAr.trim());
-        }
-        if (Array.isArray(data.transcriptSegments) && data.transcriptSegments.length > 0) {
-          transcriptSegments = data.transcriptSegments.map((seg, idx) => ({
-            id: seg.id || `seg-${idx + 1}`,
-            startSec: Number(seg.startSec) || 0,
-            endSec: Math.max((Number(seg.startSec) || 0) + 1, Number(seg.endSec) || 10),
-            textAr: applySmartPartialTashkeel(seg.textAr),
-          }));
-        }
-        if (data.description?.trim()) {
-          generatedDescription = data.description.trim();
-        }
+      if (data.formattedTextAr?.trim()) {
+        formattedTextAr = applySmartPartialTashkeel(data.formattedTextAr.trim());
+      }
+      if (Array.isArray(data.transcriptSegments) && data.transcriptSegments.length > 0) {
+        transcriptSegments = data.transcriptSegments.map((seg, idx) => ({
+          id: seg.id || `seg-${idx + 1}`,
+          startSec: Number(seg.startSec) || 0,
+          endSec: Math.max((Number(seg.startSec) || 0) + 1, Number(seg.endSec) || 10),
+          textAr: applySmartPartialTashkeel(seg.textAr),
+        }));
+      }
+      if (data.description?.trim()) {
+        generatedDescription = data.description.trim();
       }
     } catch {
       if (contentType === 'video') {

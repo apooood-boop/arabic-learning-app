@@ -28,6 +28,7 @@ import {
   stripTashkeel,
   unlockArabicAudioContext,
 } from '../utils/arabic';
+import { generateExamClient } from '../utils/geminiClient';
 
 interface ExamsViewProps {
   cards: VocabCard[];
@@ -190,34 +191,24 @@ export function ExamsView({
         exampleEn: c.examples[0]?.english,
       }));
 
-    try {
-      const response = await fetch('/api/exams/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          level: examLevel,
-          focus: activeFocus,
-          count: questionCount,
-          words: wordsPayload,
-        }),
-      });
-
-      const contentType = (response.headers.get('content-type') || '').toLowerCase();
-      if (!response.ok || !contentType.includes('application/json')) {
-        throw new Error('Exam API unavailable on host.');
-      }
-      const data = (await response.json()) as GeneratedExam;
-      if (!Array.isArray(data?.questions) || data.questions.length === 0) {
-        throw new Error('No exam questions returned.');
-      }
-      setExam(data);
-    } catch {
-      const fallback = buildClientFallbackExam(
+    const fallbackBuilder = () =>
+      buildClientFallbackExam(
         candidateCards.length > 0 ? candidateCards : cards,
         examLevel,
         questionCount
       );
-      setExam(fallback);
+
+    try {
+      const data = await generateExamClient({
+        level: examLevel,
+        focus: activeFocus,
+        count: questionCount,
+        words: wordsPayload,
+        fallbackBuilder,
+      });
+      setExam(data);
+    } catch {
+      setExam(fallbackBuilder());
     } finally {
       setLoading(false);
     }
