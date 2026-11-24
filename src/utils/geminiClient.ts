@@ -1,4 +1,8 @@
-import { findExactLexiconMatch, lookupFallbackWord } from '../data/fallbackLexicon';
+import {
+  buildResilientWordAnalysis,
+  findExactLexiconMatch,
+  lookupFallbackWord,
+} from '../data/fallbackLexicon';
 import { generateFallbackLessonQuiz } from '../data/lessonQuizzes';
 import type {
   GeneratedConversation,
@@ -603,29 +607,17 @@ export async function analyzeArabicWordClient(params: {
 
     if (!apiKey) {
       const missingKeyMsg =
-        'Translation unavailable: Gemini API key (VITE_GEMINI_API_KEY) is not configured.';
-      console.error('[Qalam Translation]', missingKeyMsg);
-      if (curatedMatch) {
-        return {
-          ...curatedMatch,
-          notice: 'Showing curated Arabic dictionary entry (VITE_GEMINI_API_KEY not configured).',
-        };
-      }
-      throw new GeminiTranslationError(missingKeyMsg, { code: 'MISSING_KEY' });
+        'Translation notice: Gemini API key is not configured — showing built-in Arabic analysis.';
+      console.warn('[Qalam Translation]', missingKeyMsg);
+      return buildResilientWordAnalysis(trimmedWord, trimmedContext, missingKeyMsg, targetLevel);
     }
 
     if (Date.now() < getCooldownUntil()) {
       const cooldownMsg =
         getActiveQuotaNotice() ||
-        'Gemini free quota was reached (HTTP 429). Please wait a moment and try again.';
-      console.error('[Qalam Translation] Skipping request during quota cooldown:', cooldownMsg);
-      if (curatedMatch) {
-        return {
-          ...curatedMatch,
-          notice: cooldownMsg,
-        };
-      }
-      throw new GeminiTranslationError(cooldownMsg, { status: 429, code: 'QUOTA_EXCEEDED' });
+        'Gemini free quota is cooling down. Showing built-in Arabic analysis.';
+      console.warn('[Qalam Translation] Skipping request during quota cooldown:', cooldownMsg);
+      return buildResilientWordAnalysis(trimmedWord, trimmedContext, cooldownMsg, targetLevel);
     }
 
     const prompt = `Translate and analyze this Arabic word or phrase accurately for a ${targetLevel} learner.
@@ -740,26 +732,7 @@ Return JSON with:
           code = 'AUTH_ERROR';
         }
 
-        const fallbackResult: WordAnalysis = curatedMatch || {
-          word: stripTashkeel(trimmedWord),
-          wordWithTashkeel: applySmartPartialTashkeel(trimmedWord),
-          vocalizedWord: stripFinalIrabForSpeech(trimmedWord),
-          partOfSpeech: 'Word',
-          wordType: inferArabicWordType(trimmedWord),
-          root: formatMinimalArabicRoot(trimmedWord),
-          transliteration: '',
-          englishMeaning: `Contextual translation for "${trimmedWord}"`,
-          examples: [
-            {
-              arabic: applySmartPartialTashkeel(trimmedContext),
-              english: `Contextual example sentence for "${trimmedWord}".`,
-            },
-          ],
-          level: targetLevel,
-          source: 'lexicon',
-          notice: `Translation fallback (HTTP ${response.status}: API authentication/quota status).`,
-        };
-        return { ...fallbackResult, notice: userMessage };
+        return buildResilientWordAnalysis(trimmedWord, trimmedContext, userMessage, targetLevel);
       }
 
       const payload = (await response.json()) as {
@@ -776,56 +749,43 @@ Return JSON with:
           .trim() || '';
 
       if (!rawText) {
-        console.error('[Qalam Translation] Gemini returned empty response payload:', payload);
-        if (curatedMatch) {
-          return {
-            ...curatedMatch,
-            notice: 'Gemini returned an empty response — showing curated dictionary entry.',
-          };
-        }
-        throw new GeminiTranslationError(
-          'Gemini returned an empty translation response. Please try again.',
-          { code: 'EMPTY_RESPONSE' }
+        console.warn('[Qalam Translation] Gemini returned empty response payload:', payload);
+        return buildResilientWordAnalysis(
+          trimmedWord,
+          trimmedContext,
+          'Showing built-in Arabic analysis (Gemini returned empty response).',
+          targetLevel
         );
       }
 
       const parsedResult = parseGeminiTranslationOutput(rawText, trimmedWord, targetLevel);
       if (!parsedResult) {
-        console.error('[Qalam Translation] Could not parse Gemini translation response:', rawText);
-        if (curatedMatch) {
-          return {
-            ...curatedMatch,
-            notice: 'Could not parse Gemini response — showing curated dictionary entry.',
-          };
-        }
-        throw new GeminiTranslationError(
-          'Could not read the translation returned by Gemini. Please try again.',
-          { code: 'EMPTY_RESPONSE' }
+        console.warn('[Qalam Translation] Could not parse Gemini translation response:', rawText);
+        return buildResilientWordAnalysis(
+          trimmedWord,
+          trimmedContext,
+          'Showing built-in Arabic analysis (Gemini response could not be parsed).',
+          targetLevel
         );
       }
 
       setCachedGeminiResult(cacheKey, parsedResult);
       return parsedResult;
     } catch (err) {
-      if (err instanceof GeminiTranslationError) {
-        throw err;
-      }
-
       const errMsg = err instanceof Error ? err.message : String(err);
-      const isTimeout = err instanceof DOMException && err.name === 'AbortError' || /abort|timeout/i.test(errMsg);
-      console.error(
-        `[Qalam Translation] Request to ${GEMINI_MODEL} failed:`,
+      const isTimeout =
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        /abort|timeout/i.test(errMsg);
+      console.warn(
+        `[Qalam Translation] Request to ${GEMINI_MODEL} failed, using built-in analysis:`,
         err
       );
 
       const userMessage = isTimeout
-        ? 'Translation request timed out while contacting Gemini. Please try again.'
-        : 'Network error while contacting Gemini translation service. Please check your connection and try again.';
+        ? 'Translation request timed out — showing built-in Arabic analysis.'
+        : 'Gemini translation service temporarily unavailable — showing built-in Arabic analysis.';
 
-      if (curatedMatch) {
-        return { ...curatedMatch, notice: userMessage };
-      }
-      throw new GeminiTranslationError(userMessage, { code: 'NETWORK_ERROR' });
+      return buildResilientWordAnalysis(trimmedWord, trimmedContext, userMessage, targetLevel);
     } finally {
       clearTimeout(timer);
     }

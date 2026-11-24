@@ -146,10 +146,9 @@ async function probeGeminiEndpointMetadata(apiKey: string): Promise<string | nul
   const timer = window.setTimeout(() => controller.abort(), 2500);
   try {
     const cleanKey = apiKey.trim();
-    const isAuthToken = cleanKey.startsWith('AQ.');
-    const headers: Record<string, string> = isAuthToken
-      ? { Authorization: `Bearer ${cleanKey}` }
-      : { 'x-goog-api-key': cleanKey };
+    const headers: Record<string, string> = {
+      'x-goog-api-key': cleanKey,
+    };
 
     const res = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite',

@@ -1,4 +1,33 @@
+const ADMIN_KEY_OVERRIDE_STORAGE_KEY = 'qalam_admin_gemini_api_key_override';
+
+export function getAdminGeminiApiKeyOverride(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(ADMIN_KEY_OVERRIDE_STORAGE_KEY);
+    const cleaned = (raw || '').trim();
+    return cleaned && cleaned !== 'MY_GEMINI_API_KEY' ? cleaned : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setAdminGeminiApiKeyOverride(key: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!key || !key.trim()) {
+      window.localStorage.removeItem(ADMIN_KEY_OVERRIDE_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(ADMIN_KEY_OVERRIDE_STORAGE_KEY, key.trim());
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export function getClientGeminiApiKey(): string | null {
+  const override = getAdminGeminiApiKeyOverride();
+  if (override) return override;
+
   try {
     const metaEnv =
       typeof import.meta !== 'undefined'
@@ -18,6 +47,49 @@ export function getClientGeminiApiKey(): string | null {
   }
 }
 
+export interface GeminiApiKeyInfo {
+  source: 'Admin Override' | 'Environment Variable' | 'None';
+  key: string | null;
+  masked: string;
+  length: number;
+  hasOverride: boolean;
+}
+
+export function getGeminiApiKeyInfo(): GeminiApiKeyInfo {
+  const override = getAdminGeminiApiKeyOverride();
+  const envRaw = (() => {
+    try {
+      const metaEnv =
+        typeof import.meta !== 'undefined'
+          ? (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+          : undefined;
+      return (metaEnv?.VITE_GEMINI_API_KEY?.trim() || metaEnv?.VITE_API_KEY?.trim() || '').trim();
+    } catch {
+      return '';
+    }
+  })();
+
+  const activeKey = override || (envRaw && envRaw !== 'MY_GEMINI_API_KEY' ? envRaw : null);
+  const source = override ? 'Admin Override' : (envRaw && envRaw !== 'MY_GEMINI_API_KEY' ? 'Environment Variable' : 'None');
+
+  let masked = 'None configured';
+  if (activeKey) {
+    if (activeKey.length <= 8) {
+      masked = '••••••••';
+    } else {
+      masked = `${activeKey.slice(0, 6)}••••${activeKey.slice(-4)}`;
+    }
+  }
+
+  return {
+    source: source as GeminiApiKeyInfo['source'],
+    key: activeKey,
+    masked,
+    length: activeKey ? activeKey.length : 0,
+    hasOverride: Boolean(override),
+  };
+}
+
 export interface GeminiRestResult {
   response: Response;
   errorBody: string;
@@ -34,23 +106,27 @@ export async function fetchGeminiGenerateContent(params: {
 }): Promise<GeminiRestResult> {
   const logPrefix = params.logPrefix || 'Gemini API';
   const cleanModel = (params.model || 'gemini-2.5-flash').replace(/^models\//, '');
-  const url = '/api/gemini/generateContent';
+  const proxyUrl = '/api/gemini/generateContent';
+  const targetGoogleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent`;
+  const cleanKey = (params.apiKey || getClientGeminiApiKey() || '').trim();
+  const bodyJson = JSON.stringify({
+    model: cleanModel,
+    payload: params.payload,
+    apiKey: cleanKey || undefined,
+  });
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(proxyUrl, {
       method: 'POST',
       signal: params.signal,
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: cleanModel,
-        payload: params.payload,
-      }),
+      body: bodyJson,
     });
 
     if (res.ok) {
-      return { response: res, errorBody: '', url };
+      return { response: res, errorBody: '', url: targetGoogleUrl };
     }
 
     const errorBody = await res.text().catch(() => '');
@@ -69,7 +145,7 @@ export async function fetchGeminiGenerateContent(params: {
       `[${logPrefix}] Server Gemini proxy failed (HTTP ${res.status}): ${detailMsg}`
     );
 
-    return { response: res, errorBody, errorMessage, url };
+    return { response: res, errorBody, errorMessage, url: targetGoogleUrl };
   } catch (err) {
     const errorBody = err instanceof Error ? err.message : String(err);
     console.error(`[${logPrefix}] Network error contacting server Gemini proxy:`, errorBody);
@@ -77,7 +153,7 @@ export async function fetchGeminiGenerateContent(params: {
       response: new Response(JSON.stringify({ error: { message: errorBody } }), { status: 500 }),
       errorBody,
       errorMessage: errorBody,
-      url,
+      url: targetGoogleUrl,
     };
   }
 }
@@ -173,4 +249,3 @@ export function notifyGeminiQuotaNotice(message: string): void {
     new CustomEvent('qalam:quota-notice', { detail: { message } })
   );
 }
-

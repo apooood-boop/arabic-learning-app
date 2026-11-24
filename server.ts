@@ -4,7 +4,11 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
-import { findExactLexiconMatch, lookupFallbackWord } from './src/data/fallbackLexicon.ts';
+import {
+  buildResilientWordAnalysis,
+  findExactLexiconMatch,
+  lookupFallbackWord,
+} from './src/data/fallbackLexicon.ts';
 import { generateFallbackLessonQuiz } from './src/data/lessonQuizzes.ts';
 import type {
   GeneratedConversation,
@@ -117,22 +121,17 @@ app.post('/api/word/analyze', async (req, res) => {
     return res.json({ ...cached, source: 'cache' });
   }
 
-  // 2. If GEMINI_API_KEY is missing, return curated built-in lexicon entry if available or 503 error
+  // 2. If GEMINI_API_KEY is missing, return built-in lexicon analysis
   const apiKey = getConfiguredApiKey();
   if (!apiKey) {
-    const fallback = lookupFallbackWord(
+    const fallback = buildResilientWordAnalysis(
       trimmedWord,
       trimmedContext,
-      'Using built-in Arabic lexicon mode for instant translation.',
+      'Using built-in Arabic analysis mode for instant translation.',
       targetLevel
     );
-    if (fallback) {
-      setServerCache(cacheKey, fallback);
-      return res.json(fallback);
-    }
-    return res.status(503).json({
-      error: 'Translation unavailable: Gemini API key is not configured.',
-    });
+    setServerCache(cacheKey, fallback);
+    return res.json(fallback);
   }
 
   try {
@@ -283,22 +282,14 @@ Return strict JSON with:
         ? 'Translation request timed out.'
         : 'Gemini translation request failed.';
 
-    const hasExact = Boolean(findExactLexiconMatch(trimmedWord));
-    if (hasExact) {
-      const fallback = lookupFallbackWord(
-        trimmedWord,
-        trimmedContext,
-        `${friendlyNotice} Showing curated dictionary entry.`,
-        targetLevel
-      );
-      if (fallback) {
-        return res.json(fallback);
-      }
-    }
-
-    return res.status(isInvalidKey ? 401 : 502).json({
-      error: `${friendlyNotice} Please try again.`,
-    });
+    const fallback = buildResilientWordAnalysis(
+      trimmedWord,
+      trimmedContext,
+      `${friendlyNotice} Showing built-in Arabic analysis.`,
+      targetLevel
+    );
+    setServerCache(cacheKey, fallback);
+    return res.json(fallback);
   }
 });
 
@@ -2107,20 +2098,30 @@ Requirements:
 
 // Secure Server-Side Gemini Proxy Route for all client AI calls
 app.post('/api/gemini/generateContent', async (req, res) => {
-  const { model, payload } = req.body as { model?: string; payload?: unknown };
-  const apiKey = getConfiguredApiKey();
+  const { model, payload, apiKey: clientApiKey } = req.body as {
+    model?: string;
+    payload?: unknown;
+    apiKey?: string;
+  };
+  const apiKey = (clientApiKey && typeof clientApiKey === 'string' && clientApiKey.trim())
+    ? clientApiKey.trim()
+    : getConfiguredApiKey();
+
   if (!apiKey) {
-    return res.status(500).json({ error: 'Server Gemini API key not configured.' });
+    return res.status(500).json({ error: { message: 'Server Gemini API key not configured.' } });
   }
 
   const modelName = model || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
   try {
+    const isAuthToken = apiKey.startsWith('AQ.');
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'User-Agent': 'aistudio-build',
     };
-    if (apiKey.startsWith('AQ.')) {
+
+    if (isAuthToken) {
       headers['Authorization'] = `Bearer ${apiKey}`;
     } else {
       headers['x-goog-api-key'] = apiKey;
@@ -2141,7 +2142,8 @@ app.post('/api/gemini/generateContent', async (req, res) => {
     return res.send(errorBody);
   } catch (err) {
     console.error('[Gemini Proxy Server] Error proxying generateContent:', err);
-    return res.status(502).json({ error: 'Failed to contact Gemini API from server.' });
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return res.status(502).json({ error: { message: errMsg } });
   }
 });
 

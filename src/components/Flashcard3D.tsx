@@ -186,7 +186,7 @@ export function Flashcard3D({
     onDelete?.(card.id);
   };
 
-  const heightClass = large ? 'min-h-[450px]' : 'min-h-[410px]';
+  const heightClass = large ? 'min-h-[460px]' : 'min-h-[420px]';
   const srsInfo = card.srsRating ? SRS_META[card.srsRating] : null;
   const { wordType, root } = enrichWordMeta(
     card.wordWithTashkeel,
@@ -306,17 +306,17 @@ export function Flashcard3D({
                 : applySmartPartialTashkeel(card.wordWithTashkeel)}
             </p>
             {(wordType || root) && (
-              <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 font-arabic-cairo">
+              <div className="mt-2 flex flex-wrap items-center justify-center gap-2 font-arabic-cairo">
                 {wordType && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-[#DCE5D3] bg-[#EEF2E9] px-2.5 py-0.5 text-[11px] font-medium text-[#2D3B22]">
-                    <span className="text-[#5A6552]">نوع الكلمة:</span>
-                    <span className="font-semibold">{wordType}</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-[#CDE0C4] bg-[#EEF2E9] px-3 py-1 text-xs font-bold text-[#2D3B22] shadow-2xs">
+                    <span className="text-[#5A6552] font-normal">نوع الكلمة:</span>
+                    <span className="font-bold">{wordType}</span>
                   </span>
                 )}
                 {root && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-[#E8D7A7] bg-[#FBF3DC]/75 px-2.5 py-0.5 text-[11px] font-medium text-[#1F2718]">
-                    <span className="text-[#5A6552]">الجذر:</span>
-                    <span className="font-semibold">{root}</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-[#F3E2B4] bg-[#FBF3DC] px-3 py-1 text-xs font-bold text-[#1F2718] shadow-2xs">
+                    <span className="text-[#7A5B10] font-bold">الجذر:</span>
+                    <span className="font-mono tracking-wider font-extrabold">{root}</span>
                   </span>
                 )}
               </div>
@@ -382,7 +382,7 @@ export function Flashcard3D({
           </div>
         </div>
 
-        {/* BACK SIDE: English meaning + contextual translations + SRS Controls */}
+        {/* BACK SIDE: English meaning + Example sentences with English translation underneath + SRS Controls */}
         <div
           dir="ltr"
           className="backface-hidden rotate-y-180 absolute inset-0 flex flex-col justify-between rounded-2xl border border-[#D4A338]/45 bg-gradient-to-br from-white via-[#FAFBF8] to-[#EEF2E9]/70 p-5 sm:p-6 shadow-sm overflow-y-auto overscroll-contain"
@@ -411,8 +411,8 @@ export function Flashcard3D({
             </span>
           </div>
 
-          <div className="py-2">
-            <p className="text-xs font-semibold text-[#5A6552] mb-1">English Meaning</p>
+          <div className="py-2 space-y-1">
+            <p className="text-xs font-semibold text-[#5A6552]">English Meaning</p>
             <h3
               className={`font-display font-bold text-[#1F2718] ${
                 large ? 'text-2xl' : 'text-xl'
@@ -423,16 +423,16 @@ export function Flashcard3D({
           </div>
 
           {card.examples.length > 0 && (
-            <div className="space-y-2 border-t border-[#DCE5D3]/80 pt-3">
-              <p className="text-xs font-semibold text-[#5A6552]">Context Translations</p>
-              {card.examples.slice(0, 3).map((ex, idx) => (
+            <div className="space-y-2.5 border-t border-[#DCE5D3]/80 pt-3">
+              <p className="text-xs font-semibold text-[#5A6552]">Example Sentences</p>
+              {card.examples.slice(0, 2).map((ex, idx) => (
                 <div
                   key={idx}
-                  className="rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2 text-sm leading-relaxed text-[#1F2718]"
+                  className="rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-sm leading-relaxed text-[#1F2718] space-y-1 shadow-2xs"
                 >
-                  <div className="flex items-center gap-2 mb-0.5">
+                  <div className="flex items-center justify-between">
                     <span className="font-mono text-xs font-bold text-[#9A6F14]">
-                      0{idx + 1}.
+                      Example {idx + 1}
                     </span>
                     {ex.contextLabel && (
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#2D3B22]">
@@ -440,7 +440,12 @@ export function Flashcard3D({
                       </span>
                     )}
                   </div>
-                  <p>{ex.english}</p>
+                  <p className="font-arabic-scheherazade text-lg sm:text-[19px] leading-[2.0] text-[#1F2718] text-right" dir="rtl" lang="ar">
+                    {card.hasCustomEdits ? ex.arabic : applySmartPartialTashkeel(ex.arabic)}
+                  </p>
+                  <p className="text-xs text-[#5A6552] font-normal leading-normal" dir="ltr">
+                    {ex.english}
+                  </p>
                 </div>
               ))}
             </div>

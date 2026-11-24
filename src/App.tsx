@@ -35,7 +35,7 @@ import { UserManagementModal } from './components/UserManagementModal';
 import { VocabularyView } from './components/VocabularyView';
 import { DailyStudyLog, WeeklyVocabChart } from './components/WeeklyVocabChart';
 import { ActiveWordSelection, WordContextMenu } from './components/WordContextMenu';
-import { lookupFallbackWord } from './data/fallbackLexicon';
+import { buildResilientWordAnalysis, lookupFallbackWord } from './data/fallbackLexicon';
 import { SAMPLE_LESSONS } from './data/lessons';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import {
@@ -815,29 +815,17 @@ export default function App() {
     try {
       const result = await fetchWordAnalysis(wordSelection);
       setWordAnalysis(result);
+      setAnalysisError(null);
     } catch (err) {
-      console.error('[Qalam Translation] Failed to translate word:', err);
-      const curated = lookupFallbackWord(
+      console.warn('[Qalam Translation] fetchWordAnalysis threw error, using built-in analysis:', err);
+      const fallback = buildResilientWordAnalysis(
         wordSelection.word,
         wordSelection.contextSentence,
-        undefined,
+        'Showing built-in Arabic analysis.',
         targetLevel
       );
-      if (curated) {
-        const noticeMsg =
-          err instanceof Error && err.message
-            ? err.message
-            : 'Showing curated Arabic dictionary entry.';
-        setWordAnalysis({ ...curated, notice: noticeMsg });
-        setAnalysisError(null);
-      } else {
-        setWordAnalysis(null);
-        setAnalysisError(
-          err instanceof Error && err.message
-            ? err.message
-            : 'Unable to translate this word right now. Please try again.'
-        );
-      }
+      setWordAnalysis(fallback);
+      setAnalysisError(null);
     } finally {
       setAnalysisLoading(false);
     }

@@ -1146,6 +1146,72 @@ export function lookupFallbackWord(
   };
 }
 
+export function buildResilientWordAnalysis(
+  rawWord: string,
+  contextSentence?: string,
+  notice?: string,
+  level: ProficiencyLevel = 'intermediate'
+): WordAnalysis {
+  const match = lookupFallbackWord(rawWord, contextSentence, notice, level);
+  if (match) return match;
+
+  const cleanOriginal = rawWord.trim();
+  const resolvedWordType = inferArabicWordType(cleanOriginal);
+  const partOfSpeech =
+    resolvedWordType === 'فعل'
+      ? 'Verb'
+      : resolvedWordType === 'حرف'
+        ? 'Particle'
+        : resolvedWordType === 'ظرف'
+          ? 'Adverb'
+          : resolvedWordType === 'ضمير'
+            ? 'Pronoun'
+            : 'Noun';
+
+  const standaloneAr = normalizeStandaloneVocabWord(cleanOriginal, {
+    wordType: resolvedWordType,
+    partOfSpeech,
+  });
+  const finalWordAr = applySmartPartialTashkeel(standaloneAr || cleanOriginal);
+  const cleanContext = (contextSentence?.trim() || cleanOriginal);
+
+  return {
+    word: stripTashkeel(finalWordAr),
+    wordWithTashkeel: finalWordAr,
+    vocalizedWord: stripFinalIrabForSpeech(cleanOriginal, {
+      wordType: resolvedWordType,
+      partOfSpeech,
+    }),
+    partOfSpeech,
+    wordType: resolvedWordType,
+    root: formatMinimalArabicRoot(cleanOriginal),
+    transliteration: '',
+    englishMeaning: `Contextual translation for "${stripTashkeel(finalWordAr)}"`,
+    examples: [
+      {
+        arabic: applySmartPartialTashkeel(
+          cleanContext !== cleanOriginal
+            ? cleanContext
+            : `هَذَا سِيَاقٌ عَرَبِيٌّ لِكَلِمَةِ ${finalWordAr} فِي القِرَاءَةِ.`
+        ),
+        english:
+          cleanContext !== cleanOriginal
+            ? `Context sentence containing "${stripTashkeel(finalWordAr)}".`
+            : `Example sentence for "${stripTashkeel(finalWordAr)}".`,
+        contextLabel:
+          level === 'beginner'
+            ? 'Beginner · Daily Use'
+            : level === 'advanced'
+              ? 'Advanced · Context'
+              : 'Intermediate · Practical Use',
+      },
+    ],
+    level,
+    source: 'lexicon',
+    notice: notice || 'Showing built-in Arabic analysis.',
+  };
+}
+
 export interface LexiconDistractorItem {
   normalizedKey: string;
   wordWithTashkeel: string;

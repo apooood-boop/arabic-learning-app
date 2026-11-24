@@ -49,6 +49,12 @@ import {
 } from '../utils/adminDiagnostics';
 import { stopArabicSpeech } from '../utils/arabic';
 import {
+  getGeminiApiKeyInfo,
+  setAdminGeminiApiKeyOverride,
+  type GeminiApiKeyInfo,
+} from '../utils/geminiAuth';
+import { clearGeminiResponseCaches } from '../utils/geminiClient';
+import {
   adminDeleteUser,
   adminResetUserPassword,
   adminUpdateUserRole,
@@ -106,6 +112,67 @@ export function UserManagementModal({
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [savingReset, setSavingReset] = useState(false);
+
+  // Primary Admin Gemini API Key Manager state
+  const isPrimaryAdmin =
+    currentUser?.email?.toLowerCase() === 'apooood@gmail.com' && currentUser?.role === 'admin';
+  const [apiKeyInfo, setApiKeyInfo] = useState<GeminiApiKeyInfo>(() => getGeminiApiKeyInfo());
+  const [customApiKeyInput, setCustomApiKeyInput] = useState('');
+  const [showCustomApiKey, setShowCustomApiKey] = useState(false);
+  const [savingApiKey, setSavingApiKey] = useState(false);
+  const [apiKeyMessage, setApiKeyMessage] = useState<string | null>(null);
+
+  const refreshApiKeyInfo = () => {
+    setApiKeyInfo(getGeminiApiKeyInfo());
+  };
+
+  const handleSaveApiKeyOverride = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = customApiKeyInput.trim();
+    if (!trimmed) {
+      setApiKeyMessage('الرجاء إدخال مفتاح صالح · Please enter a valid API key.');
+      return;
+    }
+    setSavingApiKey(true);
+    setApiKeyMessage(null);
+    try {
+      setAdminGeminiApiKeyOverride(trimmed);
+      refreshApiKeyInfo();
+      setCustomApiKeyInput('');
+      setApiKeyMessage('تم حفظ مفتاح Gemini المخصص بنجاح! · Custom Gemini API key saved successfully.');
+      refreshHealth();
+    } catch (err) {
+      setApiKeyMessage(err instanceof Error ? err.message : 'Failed to save API key override.');
+    } finally {
+      setSavingApiKey(false);
+    }
+  };
+
+  const handleResetToEnvApiKey = () => {
+    setApiKeyMessage(null);
+    try {
+      setAdminGeminiApiKeyOverride(null);
+      refreshApiKeyInfo();
+      setCustomApiKeyInput('');
+      setApiKeyMessage('تم العودة إلى مفتاح البيئة الافتراضي · Reset to environment variable key.');
+      refreshHealth();
+    } catch (err) {
+      setApiKeyMessage(err instanceof Error ? err.message : 'Failed to reset API key.');
+    }
+  };
+
+  const handleResetCooldownAndTest = async () => {
+    setApiKeyMessage(null);
+    try {
+      clearGeminiResponseCaches();
+      refreshApiKeyInfo();
+      setApiKeyMessage('تم مسح وقت الانتظار (Cooldown) وجاري اختبار الاتصال...');
+      refreshHealth();
+      await handleRunGeminiPing();
+    } catch (err) {
+      setApiKeyMessage(err instanceof Error ? err.message : 'Failed to reset cooldown & test.');
+    }
+  };
 
   // Smart Diagnostics & Repair state
   const [health, setHealth] = useState<AdminHealthSnapshot | null>(null);
@@ -179,6 +246,7 @@ export function UserManagementModal({
     setIsScanning(false);
     loadList();
     refreshHealth();
+    refreshApiKeyInfo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, currentUser?.id, currentUser?.role]);
 
@@ -913,6 +981,116 @@ export function UserManagementModal({
                 </button>
               </div>
             </div>
+
+            {/* Primary Admin Only: Gemini API Key Manager Card */}
+            {isPrimaryAdmin && (
+              <div className="rounded-2xl border-2 border-[#D4A338]/60 bg-gradient-to-br from-white via-[#FAFBF8] to-[#FBF3DC]/40 p-4 space-y-3.5 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#DCE5D3] pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#16200F] text-[#FACC15] shadow-2xs">
+                      <KeyRound className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-bold text-[#1F2718] flex items-center gap-2">
+                        <span>Gemini API Key Manager</span>
+                        <span className="rounded-md bg-[#16200F] px-2 py-0.5 font-mono text-[10px] text-[#FEF08A]">
+                          Primary Admin Only
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-[#5A6552]">
+                        Active Source: <strong className="text-[#2D3B22]">{apiKeyInfo.source}</strong> · Length: <span className="font-mono">{apiKeyInfo.length}</span> chars
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-[#EEF2E9] px-2.5 py-1 font-mono text-xs font-bold text-[#2D3B22] border border-[#DCE5D3]">
+                      {apiKeyInfo.masked}
+                    </span>
+                  </div>
+                </div>
+
+                {apiKeyMessage && (
+                  <div className="rounded-xl border border-[#3B4D2B]/30 bg-[#EEF2E9] px-3.5 py-2 text-xs font-medium text-[#2D3B22]">
+                    {apiKeyMessage}
+                  </div>
+                )}
+
+                <form onSubmit={handleSaveApiKeyOverride} className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <label htmlFor="custom-gemini-key" className="text-xs font-semibold text-[#1F2718]">
+                      Set Custom Gemini API Key Override (saved to localStorage):
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomApiKey((prev) => !prev)}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#5A6552] hover:text-[#2D3B22] cursor-pointer"
+                    >
+                      {showCustomApiKey ? (
+                        <>
+                          <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Hide</span>
+                        </>
+                      ) : (
+                        <>
+                          <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Show</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                    <div className="relative flex-1">
+                      <KeyRound
+                        className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6B7861]"
+                        aria-hidden="true"
+                      />
+                      <input
+                        id="custom-gemini-key"
+                        type={showCustomApiKey ? 'text' : 'password'}
+                        value={customApiKeyInput}
+                        onChange={(e) => setCustomApiKeyInput(e.target.value)}
+                        placeholder="Paste custom API key or AQ... token here"
+                        className="w-full rounded-xl border border-[#DCE5D3] bg-white pl-8 pr-3 py-2 font-mono text-xs text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none focus:ring-2 focus:ring-[#FACC15]/40"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={savingApiKey || !customApiKeyInput.trim()}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-4 py-2 text-xs font-bold text-white hover:brightness-110 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                      <span>{savingApiKey ? 'Saving...' : 'Save Override'}</span>
+                    </button>
+                  </div>
+                </form>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#DCE5D3]/80 pt-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {apiKeyInfo.hasOverride && (
+                      <button
+                        type="button"
+                        onClick={handleResetToEnvApiKey}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-[#FEF7E6] px-3 py-1.5 text-xs font-semibold text-[#7C4A03] hover:bg-amber-100 cursor-pointer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Reset to Env</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleResetCooldownAndTest}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#2D3B22] px-3.5 py-1.5 text-xs font-bold text-[#FACC15] hover:brightness-110 shadow-xs cursor-pointer"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Reset Cooldown &amp; Test</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Health Cards Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
