@@ -737,6 +737,278 @@ const RAW_LEXICON: Record<string, LexiconEntry> = {
       { arabic: 'يَسْكُنُ القَلْبُ إِلَى طُمَأْنِينَةٍ عَمِيقَةٍ وَسَطَ الهُدُوءِ.', english: 'The heart settles into deep serenity amidst the quiet.' },
     ],
   },
+
+  // Essential everyday vocabulary dictionary fallback
+  'مكتبة': {
+    wordWithTashkeel: 'مَكْتَبَة',
+    partOfSpeech: 'Noun',
+    transliteration: 'maktaba',
+    englishMeaning: 'library / bookstore',
+    examples: [
+      { arabic: 'يَجْلِسُ الطَّالِبُ فِي المَكْتَبَةِ الهَادِئَةِ لِلْقِرَاءَةِ.', english: 'The student sits in the quiet library to read.' },
+      { arabic: 'اشْتَرَيْتُ كِتَابًا جَدِيدًا مِنَ المَكْتَبَةِ القَرِيبَةِ.', english: 'I bought a new book from the nearby bookstore.' },
+    ],
+  },
+  'مكتب': {
+    wordWithTashkeel: 'مَكْتَب',
+    partOfSpeech: 'Noun',
+    transliteration: 'maktab',
+    englishMeaning: 'desk / office',
+    examples: [
+      { arabic: 'وَضَعَتْ كِتَابَهَا عَلَى المَكْتَبِ الخَشَبِيِّ.', english: 'She placed her book on the wooden desk.' },
+      { arabic: 'يَعْمَلُ المُهَنْدِسُ فِي مَكْتَبٍ هَادِئٍ وَمُنَظَّمٍ.', english: 'The engineer works in a quiet and organized office.' },
+    ],
+  },
+  'كتاب': {
+    wordWithTashkeel: 'كِتَاب',
+    partOfSpeech: 'Noun',
+    transliteration: 'kitāb',
+    englishMeaning: 'book',
+    examples: [
+      { arabic: 'قَرَأْتُ كِتَابًا مُمْتِعًا عَنِ التَّارِيخِ العَرَبِيِّ.', english: 'I read an enjoyable book about Arab history.' },
+      { arabic: 'هَذَا الكِتَابُ مُفِيدٌ لِطُلَّابِ اللُّغَةِ العَرَبِيَّةِ.', english: 'This book is useful for students of the Arabic language.' },
+    ],
+  },
+  'مدرسة': {
+    wordWithTashkeel: 'مَدْرَسَة',
+    partOfSpeech: 'Noun',
+    transliteration: 'madrasa',
+    englishMeaning: 'school',
+    examples: [
+      { arabic: 'يَذْهَبُ التَّلَامِيذُ إِلَى المَدْرَسَةِ كُلَّ صَبَاحٍ.', english: 'The pupils go to school every morning.' },
+      { arabic: 'تَقَعُ المَدْرَسَةُ بِالقُرْبِ مِنَ الحَدِيقَةِ العَامَّةِ.', english: 'The school is located near the public park.' },
+    ],
+  },
+  'جامعة': {
+    wordWithTashkeel: 'جَامِعَة',
+    partOfSpeech: 'Noun',
+    transliteration: 'jāmiʿa',
+    englishMeaning: 'university',
+    examples: [
+      { arabic: 'يَدْرُسُ أَخِي الأَدَبَ العَرَبِيَّ فِي الجَامِعَةِ.', english: 'My brother studies Arabic literature at the university.' },
+      { arabic: 'تَضُمُّ الجَامِعَةُ مَكْتَبَةً كَبِيرَةً لِلْبَحْثِ العِلْمِيِّ.', english: 'The university includes a large library for scientific research.' },
+    ],
+  },
+  'طالب': {
+    wordWithTashkeel: 'طَالِب',
+    partOfSpeech: 'Noun',
+    transliteration: 'ṭālib',
+    englishMeaning: 'student',
+    examples: [
+      { arabic: 'يَسْأَلُ الطَّالِبُ المُعَلِّمَ عَنْ مَعْنَى الكَلِمَةِ.', english: 'The student asks the teacher about the meaning of the word.' },
+      { arabic: 'اجْتَهَدَ الطَّالِبُ فِي دُرُوسِهِ طَوَالَ الفَصْلِ.', english: 'The student worked diligently on his lessons throughout the term.' },
+    ],
+  },
+  'معلم': {
+    wordWithTashkeel: 'مُعَلِّم',
+    partOfSpeech: 'Noun',
+    transliteration: 'muʿallim',
+    englishMeaning: 'teacher / instructor',
+    examples: [
+      { arabic: 'شَرَحَ المُعَلِّمُ القَاعِدَةَ النَّحْوِيَّةَ بِوُضُوحٍ.', english: 'The teacher explained the grammar rule clearly.' },
+      { arabic: 'يَحْتَرِمُ الطُّلَّابُ المُعَلِّمَ المُخْلِصَ فِي عَمَلِهِ.', english: 'The students respect the teacher who is dedicated to his work.' },
+    ],
+  },
+  'قلم': {
+    wordWithTashkeel: 'قَلَم',
+    partOfSpeech: 'Noun',
+    transliteration: 'qalam',
+    englishMeaning: 'pen',
+    examples: [
+      { arabic: 'كَتَبَتِ الطَّالِبَةُ الدَّرْسَ بِقَلَمٍ أَزْرَقَ.', english: 'The student wrote the lesson with a blue pen.' },
+      { arabic: 'القَلَمُ وَالدَّفْتَرُ مِنْ أَهَمِّ أَدَوَاتِ الكِتَابَةِ.', english: 'The pen and the notebook are among the most important writing tools.' },
+    ],
+  },
+  'مدينة': {
+    wordWithTashkeel: 'مَدِينَة',
+    partOfSpeech: 'Noun',
+    transliteration: 'madīna',
+    englishMeaning: 'city / town',
+    examples: [
+      { arabic: 'تَشْتَهِرُ المَدِينَةُ بِأَسْوَاقِهَا التَّقْلِيدِيَّةِ وَمَتَاحِفِهَا.', english: 'The city is famous for its traditional markets and museums.' },
+      { arabic: 'سَافَرْنَا إِلَى مَدِينَةٍ سَاحِلِيَّةٍ فِي العُطْلَةِ.', english: 'We traveled to a coastal city during the holiday.' },
+    ],
+  },
+  'قرية': {
+    wordWithTashkeel: 'قَرْيَة',
+    partOfSpeech: 'Noun',
+    transliteration: 'qarya',
+    englishMeaning: 'village',
+    examples: [
+      { arabic: 'تَتَمَيَّزُ القَرْيَةُ بِالهُدُوءِ وَالهَوَاءِ النَّقِيِّ.', english: 'The village is characterized by calm and fresh air.' },
+      { arabic: 'زُرْنَا قَرْيَةً جَمِيلَةً بَيْنَ الجِبَالِ الخَضْرَاءِ.', english: 'We visited a beautiful village among the green mountains.' },
+    ],
+  },
+  'صديق': {
+    wordWithTashkeel: 'صَدِيق',
+    partOfSpeech: 'Noun',
+    transliteration: 'ṣadīq',
+    englishMeaning: 'friend',
+    examples: [
+      { arabic: 'التَقَيْتُ بِصَدِيقٍ قَدِيمٍ فِي المَقْهَى اليَوْمَ.', english: 'I met an old friend at the café today.' },
+      { arabic: 'الصَّدِيقُ الصَّادِقُ يَقِفُ بِجَانِبِكَ دَائِمًا.', english: 'A true friend always stands by your side.' },
+    ],
+  },
+  'ماء': {
+    wordWithTashkeel: 'مَاء',
+    partOfSpeech: 'Noun',
+    transliteration: 'māʾ',
+    englishMeaning: 'water',
+    examples: [
+      { arabic: 'شَرِبَ الرَّحَّالَةُ كُوبًا مِنَ المَاءِ البَارِدِ.', english: 'The traveler drank a glass of cold water.' },
+      { arabic: 'المَاءُ النَّقِيُّ أَسَاسُ الحَيَاةِ عَلَى الأَرْضِ.', english: 'Pure water is the foundation of life on earth.' },
+    ],
+  },
+  'طعام': {
+    wordWithTashkeel: 'طَعَام',
+    partOfSpeech: 'Noun',
+    transliteration: 'ṭaʿām',
+    englishMeaning: 'food / meal',
+    examples: [
+      { arabic: 'أَعَدَّتِ الأُسْرَةُ طَعَامًا شَهِيًّا لِلضُّيُوفِ.', english: 'The family prepared delicious food for the guests.' },
+      { arabic: 'يَجْتَمِعُ الأَهْلُ حَوْلَ مَائِدَةِ الطَّعَامِ مَسَاءً.', english: 'The family gathers around the dining table in the evening.' },
+    ],
+  },
+  'عمل': {
+    wordWithTashkeel: 'عَمَل',
+    partOfSpeech: 'Noun',
+    transliteration: 'ʿamal',
+    englishMeaning: 'work / job / deed',
+    examples: [
+      { arabic: 'أَنْهَى المُوَظَّفُ عَمَلَهُ فِي الوَقْتِ المُحَدَّدِ.', english: 'The employee finished his work on time.' },
+      { arabic: 'العَمَلُ الجَمَاعِيُّ يُحَقِّقُ نَتَائِجَ أَفْضَلَ.', english: 'Teamwork achieves better results.' },
+    ],
+  },
+  'علم': {
+    wordWithTashkeel: 'عِلْم',
+    partOfSpeech: 'Noun',
+    transliteration: 'ʿilm',
+    englishMeaning: 'knowledge / science',
+    examples: [
+      { arabic: 'طَلَبُ العِلْمِ رِحْلَةٌ مُمْتِعَةٌ مَدَى الحَيَاةِ.', english: 'Seeking knowledge is an enjoyable lifelong journey.' },
+      { arabic: 'سَاهَمَ العِلْمُ الحَدِيثُ فِي تَطْوِيرِ الطِّبِّ.', english: 'Modern science contributed to advancing medicine.' },
+    ],
+  },
+  'كلمة': {
+    wordWithTashkeel: 'كَلِمَة',
+    partOfSpeech: 'Noun',
+    transliteration: 'kalima',
+    englishMeaning: 'word / speech',
+    examples: [
+      { arabic: 'تَعَلَّمْتُ كَلِمَةً عَرَبِيَّةً جَدِيدَةً هَذَا الصَّبَاحَ.', english: 'I learned a new Arabic word this morning.' },
+      { arabic: 'الكَلِمَةُ الطَّيِّبَةُ تَتْرُكُ أَثَرًا جَمِيلًا فِي النَّفْسِ.', english: 'A kind word leaves a beautiful impression on the soul.' },
+    ],
+  },
+  'قصة': {
+    wordWithTashkeel: 'قِصَّة',
+    partOfSpeech: 'Noun',
+    transliteration: 'qiṣṣa',
+    englishMeaning: 'story / tale',
+    examples: [
+      { arabic: 'قَرَأَ الأَطْفَالُ قِصَّةً قَصِيرَةً قَبْلَ النَّوْمِ.', english: 'The children read a short story before sleep.' },
+      { arabic: 'تَحْمِلُ القِصَّةُ حِكْمَةً وَعِبْرَةً جَمِيلَةً.', english: 'The story carries wisdom and a beautiful moral.' },
+    ],
+  },
+  'يوم': {
+    wordWithTashkeel: 'يَوْم',
+    partOfSpeech: 'Noun',
+    transliteration: 'yawm',
+    englishMeaning: 'day',
+    examples: [
+      { arabic: 'يَبْدَأُ يَوْمُ الدِّرَاسَةِ فِي السَّاعَةِ الثَّامِنَةِ.', english: 'The study day begins at eight o’clock.' },
+      { arabic: 'نَقْرَأُ صَفْحَةً وَاحِدَةً كُلَّ يَوْمٍ.', english: 'We read one page every day.' },
+    ],
+  },
+  'سلام': {
+    wordWithTashkeel: 'سَلَام',
+    partOfSpeech: 'Noun',
+    transliteration: 'salām',
+    englishMeaning: 'peace / greeting',
+    examples: [
+      { arabic: 'يَسْعَى النَّاسُ دَائِمًا إِلَى العَيْشِ فِي سَلَامٍ وَأَمَانٍ.', english: 'People always strive to live in peace and security.' },
+      { arabic: 'بَدَأَ اللِّقَاءُ بِتَحِيَّةِ السَّلَامِ وَالابْتِسَامَةِ.', english: 'The meeting began with a greeting of peace and a smile.' },
+    ],
+  },
+  'جميل': {
+    wordWithTashkeel: 'جَمِيل',
+    partOfSpeech: 'Adjective',
+    transliteration: 'jamīl',
+    englishMeaning: 'beautiful / lovely',
+    examples: [
+      { arabic: 'هَذَا مَنْظَرٌ طَبِيعِيٌّ جَمِيلٌ عِنْدَ الغُرُوبِ.', english: 'This is a beautiful natural view at sunset.' },
+      { arabic: 'كَتَبَ الخَطَّاطُ عِبَارَةً بِخَطٍّ عَرَبِيٍّ جَمِيلٍ.', english: 'The calligrapher wrote a phrase in beautiful Arabic script.' },
+    ],
+  },
+  'كبير': {
+    wordWithTashkeel: 'كَبِير',
+    partOfSpeech: 'Adjective',
+    transliteration: 'kabīr',
+    englishMeaning: 'big / large / great',
+    examples: [
+      { arabic: 'تَمْتَلِكُ المَدِينَةُ مَتْحَفًا كَبِيرًا لِلْفُنُونِ.', english: 'The city has a large museum for the arts.' },
+      { arabic: 'أَظْهَرَ الطَّالِبُ اهْتِمَامًا كَبِيرًا بِالتَّارِيخِ.', english: 'The student showed great interest in history.' },
+    ],
+  },
+  'جديد': {
+    wordWithTashkeel: 'جَدِيد',
+    partOfSpeech: 'Adjective',
+    transliteration: 'jadīd',
+    englishMeaning: 'new / fresh',
+    examples: [
+      { arabic: 'بَدَأْنَا اليَوْمَ دَرْسًا جَدِيدًا فِي القِرَاءَةِ.', english: 'Today we started a new lesson in reading.' },
+      { arabic: 'هَذَا الأُسْلُوبُ الجَدِيدُ يُسَاعِدُ عَلَى الحِفْظِ.', english: 'This new method helps with memorization.' },
+    ],
+  },
+  'قرا': {
+    wordWithTashkeel: 'قَرَأَ',
+    partOfSpeech: 'Verb (Past)',
+    transliteration: 'qaraʾa',
+    englishMeaning: 'he read / recited',
+    examples: [
+      { arabic: 'قَرَأَ الطَّالِبُ النَّصَّ بِصَوْتٍ وَاضِحٍ.', english: 'The student read the passage in a clear voice.' },
+      { arabic: 'قَرَأَ البَاحِثُ مَخْطُوطَاتٍ نَادِرَةً فِي المَكْتَبَةِ.', english: 'The researcher read rare manuscripts in the library.' },
+    ],
+  },
+  'كتب': {
+    wordWithTashkeel: 'كَتَبَ',
+    partOfSpeech: 'Verb (Past)',
+    transliteration: 'kataba',
+    englishMeaning: 'he wrote',
+    examples: [
+      { arabic: 'كَتَبَ المُؤَلِّفُ رِوَايَةً مَشْهُورَةً.', english: 'The author wrote a famous novel.' },
+      { arabic: 'كَتَبَ التِّلْمِيذُ الكَلِمَاتِ الجَدِيدَةَ فِي دَفْتَرِهِ.', english: 'The pupil wrote the new words in his notebook.' },
+    ],
+  },
+  'ذهب': {
+    wordWithTashkeel: 'ذَهَبَ',
+    partOfSpeech: 'Verb (Past)',
+    transliteration: 'dhahaba',
+    englishMeaning: 'he went',
+    examples: [
+      { arabic: 'ذَهَبَ الأَصْدِقَاءُ إِلَى المَكْتَبَةِ بَعْدَ الظُّهْرِ.', english: 'The friends went to the library in the afternoon.' },
+      { arabic: 'ذَهَبَ المُسَافِرُ إِلَى المَطَارِ مُبَكِّرًا.', english: 'The traveler went to the airport early.' },
+    ],
+  },
+  'مرحبا': {
+    wordWithTashkeel: 'مَرْحَبًا',
+    partOfSpeech: 'Expression',
+    transliteration: 'marḥaban',
+    englishMeaning: 'hello / welcome',
+    examples: [
+      { arabic: 'مَرْحَبًا بِكُمْ فِي دَرْسِ اللُّغَةِ العَرَبِيَّةِ.', english: 'Welcome to the Arabic language lesson.' },
+      { arabic: 'قَالَ لَهُمُ المُضِيفُ: مَرْحَبًا بِالضُّيُوفِ الكِرَامِ.', english: 'The host said to them: Welcome, honored guests.' },
+    ],
+  },
+  'شكرا': {
+    wordWithTashkeel: 'شُكْرًا',
+    partOfSpeech: 'Expression',
+    transliteration: 'shukran',
+    englishMeaning: 'thank you',
+    examples: [
+      { arabic: 'شُكْرًا جَزِيلًا عَلَى مُسَاعَدَتِكَ الكَرِيمَةِ.', english: 'Thank you very much for your kind help.' },
+      { arabic: 'قَالَ الطَّالِبُ لِمُعَلِّمِهِ: شُكْرًا عَلَى الشَّرْحِ.', english: 'The student said to his teacher: Thank you for the explanation.' },
+    ],
+  },
 };
 
 const LEXICON_WORD_META: Record<string, { wordType: string; root: string }> = {
@@ -811,6 +1083,33 @@ const LEXICON_WORD_META: Record<string, { wordType: string; root: string }> = {
   'العمارة': { wordType: 'اسم', root: 'ع - م - ر' },
   'التامل': { wordType: 'اسم', root: 'أ - م - ل' },
   'طمانينة': { wordType: 'اسم', root: 'ط - م - أ - ن' },
+  'مكتبة': { wordType: 'اسم', root: 'ك - ت - ب' },
+  'مكتب': { wordType: 'اسم', root: 'ك - ت - ب' },
+  'كتاب': { wordType: 'اسم', root: 'ك - ت - ب' },
+  'مدرسة': { wordType: 'اسم', root: 'د - ر - س' },
+  'جامعة': { wordType: 'اسم', root: 'ج - م - ع' },
+  'طالب': { wordType: 'اسم', root: 'ط - ل - ب' },
+  'معلم': { wordType: 'اسم', root: 'ع - ل - م' },
+  'قلم': { wordType: 'اسم', root: 'ق - ل - م' },
+  'مدينة': { wordType: 'اسم', root: 'م - د - ن' },
+  'قرية': { wordType: 'اسم', root: 'ق - ر - ي' },
+  'صديق': { wordType: 'اسم', root: 'ص - د - ق' },
+  'ماء': { wordType: 'اسم', root: 'م - و - ه' },
+  'طعام': { wordType: 'اسم', root: 'ط - ع - م' },
+  'عمل': { wordType: 'اسم', root: 'ع - م - ل' },
+  'علم': { wordType: 'اسم', root: 'ع - ل - م' },
+  'كلمة': { wordType: 'اسم', root: 'ك - ل - م' },
+  'قصة': { wordType: 'اسم', root: 'ق - ص - ص' },
+  'يوم': { wordType: 'اسم', root: 'ي - و - م' },
+  'سلام': { wordType: 'اسم', root: 'س - ل - م' },
+  'جميل': { wordType: 'صفة', root: 'ج - م - ل' },
+  'كبير': { wordType: 'صفة', root: 'ك - ب - ر' },
+  'جديد': { wordType: 'صفة', root: 'ج - د - د' },
+  'قرا': { wordType: 'فعل', root: 'ق - ر - أ' },
+  'كتب': { wordType: 'فعل', root: 'ك - ت - ب' },
+  'ذهب': { wordType: 'فعل', root: 'ذ - ه - ب' },
+  'مرحبا': { wordType: 'اسم', root: 'ر - ح - ب' },
+  'شكرا': { wordType: 'اسم', root: 'ش - ك - ر' },
 };
 
 function stripCommonPrefixes(normalized: string): string[] {
@@ -1186,29 +1485,24 @@ export function buildResilientWordAnalysis(
     wordType: resolvedWordType,
     root: formatMinimalArabicRoot(cleanOriginal),
     transliteration: '',
-    englishMeaning: `Contextual translation for "${stripTashkeel(finalWordAr)}"`,
-    examples: [
-      {
-        arabic: applySmartPartialTashkeel(
-          cleanContext !== cleanOriginal
-            ? cleanContext
-            : `هَذَا سِيَاقٌ عَرَبِيٌّ لِكَلِمَةِ ${finalWordAr} فِي القِرَاءَةِ.`
-        ),
-        english:
-          cleanContext !== cleanOriginal
-            ? `Context sentence containing "${stripTashkeel(finalWordAr)}".`
-            : `Example sentence for "${stripTashkeel(finalWordAr)}".`,
-        contextLabel:
-          level === 'beginner'
-            ? 'Beginner · Daily Use'
-            : level === 'advanced'
-              ? 'Advanced · Context'
-              : 'Intermediate · Practical Use',
-      },
-    ],
+    englishMeaning:
+      'الترجمة الآلية مشغولة مؤقتًا — Live AI translation is temporarily busy. Please try again shortly.',
+    examples:
+      cleanContext !== cleanOriginal
+        ? [
+            {
+              arabic: applySmartPartialTashkeel(cleanContext),
+              english:
+                'جملة من النص — Live AI sentence translation is temporarily busy; please retry shortly.',
+              contextLabel: 'Lesson Context',
+            },
+          ]
+        : [],
     level,
     source: 'lexicon',
-    notice: notice || 'Showing built-in Arabic analysis.',
+    notice:
+      notice ||
+      'الترجمة الآلية مشغولة مؤقتًا — Live AI translation is temporarily busy. Please try again shortly.',
   };
 }
 

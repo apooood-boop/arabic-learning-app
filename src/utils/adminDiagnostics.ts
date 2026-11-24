@@ -143,34 +143,34 @@ function runGeminiAndKeyCheck(): {
 
 async function probeGeminiEndpointMetadata(apiKey: string): Promise<string | null> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 2500);
+  const timer = window.setTimeout(
+    () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
+    12000
+  );
   try {
-    const cleanKey = apiKey.trim();
-    const headers: Record<string, string> = {
-      'x-goog-api-key': cleanKey,
-    };
-
-    const res = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite',
-      {
-        method: 'GET',
-        signal: controller.signal,
-        headers,
-      }
-    );
-    if (res.ok) {
-      return `Endpoint reachable (HTTP ${res.status})`;
+    const { response, modelUsed } = await fetchGeminiGenerateContent({
+      model: 'gemini-2.5-flash',
+      apiKey: apiKey.trim(),
+      signal: controller.signal,
+      logPrefix: 'Admin Diagnostics Probe',
+      payload: {
+        contents: [{ role: 'user', parts: [{ text: 'OK' }] }],
+        generationConfig: { maxOutputTokens: 4 },
+      },
+    });
+    if (response.ok) {
+      return `Proxy reachable (HTTP ${response.status} · ${modelUsed || 'gemini-2.5-flash'})`;
     }
-    if (res.status === 429) {
+    if (response.status === 429) {
       return 'Endpoint rate-limited (HTTP 429)';
     }
-    if (res.status === 401 || res.status === 403) {
-      return `Auth rejected (HTTP ${res.status})`;
+    if (response.status === 401 || response.status === 403) {
+      return `Auth rejected (HTTP ${response.status})`;
     }
-    return `Endpoint responded HTTP ${res.status}`;
+    return `Endpoint responded HTTP ${response.status}`;
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      return 'Connectivity probe timed out (2.5s)';
+    if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+      return 'Connectivity probe timed out';
     }
     return err instanceof Error ? `Network check: ${err.message}` : 'Network check failed';
   } finally {
@@ -782,19 +782,35 @@ export async function pingGeminiApiStatus(
 
   const started = performance.now();
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 7000);
+  const timer = window.setTimeout(
+    () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
+    30000
+  );
   const authMode = apiKey.startsWith('ya29.') ? 'Authorization: Bearer' : 'x-goog-api-key';
 
   try {
-    const { response, errorBody } = await fetchGeminiGenerateContent({
+    const pingPayload = {
+      contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }],
+    };
+    let result = await fetchGeminiGenerateContent({
       model: 'gemini-2.5-flash',
       apiKey,
       signal: controller.signal,
       logPrefix: 'Admin Diagnostics Ping',
-      payload: {
-        contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }],
-      },
+      payload: pingPayload,
     });
+
+    if (result.response.status === 503) {
+      result = await fetchGeminiGenerateContent({
+        model: 'gemini-2.5-flash-lite',
+        apiKey,
+        signal: controller.signal,
+        logPrefix: 'Admin Diagnostics Ping',
+        payload: pingPayload,
+      });
+    }
+
+    const { response, errorBody, modelUsed } = result;
     const durationMs = Math.round(performance.now() - started);
 
     if (response.ok) {
@@ -803,7 +819,7 @@ export async function pingGeminiApiStatus(
         ok: true,
         durationMs,
         summary: `Gemini API HTTP ${response.status} OK (${authMode})`,
-        details: `Live probe succeeded for ${maskApiKey(apiKey)}`,
+        details: `Live probe succeeded for ${maskApiKey(apiKey)} via ${modelUsed || 'gemini-2.5-flash'}`,
       };
     }
 

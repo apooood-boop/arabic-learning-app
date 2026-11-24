@@ -79,6 +79,21 @@ import {
   analyzeArabicWordClient,
   isFakePlaceholderTranslation,
 } from './utils/geminiClient';
+import {
+  AppNavigationRoute,
+  clearNavigationPersistence,
+  clearUrlHash,
+  DEFAULT_NAVIGATION_ROUTE,
+  NavSection,
+  parseHashToRoute,
+  readSavedScrollY,
+  resolveInitialNavigation,
+  saveRouteToSession,
+  saveScrollY,
+  serializeRouteToHash,
+  syncUrlHash,
+  validateRouteAgainstLessons,
+} from './utils/navigationState';
 
 const DEFAULT_PREFERENCES: ReaderPreferences = {
   showTashkeel: true,
@@ -234,21 +249,35 @@ export default function App() {
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
 
   const sessionScope = currentUser ? currentUser.id : 'guest-demo';
+  // Role/Auth Access Control: only signed-in non-guest users can add/manage custom content
+  const canAddContent = Boolean(currentUser && !currentUser.isGuest);
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('lessons');
-  const [activeNavSection, setActiveNavSection] = useState<
-    'home' | 'history' | 'levels' | 'vocabulary' | 'exams' | 'conversation'
-  >('home');
-  const [activeHeroSwitch, setActiveHeroSwitch] = useState<
-    'levels' | 'practice' | 'notes' | 'addText' | null
-  >(null);
-  const [selectedLevel, setSelectedLevel] = useLocalStorage<ProficiencyLevel>(
-    `qalam_selected_level_v2::${sessionScope}`,
-    'beginner'
-  );
   const [customLessons, setCustomLessons] = useLocalStorage<Lesson[]>(
     'qalam_custom_lessons',
     []
+  );
+
+  const initialNavRef = useRef<ReturnType<typeof resolveInitialNavigation> | null>(null);
+  if (initialNavRef.current === null) {
+    const initialLessons = canAddContent ? [...customLessons, ...SAMPLE_LESSONS] : SAMPLE_LESSONS;
+    const initialLessonIds = new Set(initialLessons.map((l) => l.id));
+    initialNavRef.current = resolveInitialNavigation(
+      Boolean(currentUser),
+      sessionScope,
+      initialLessonIds
+    );
+  }
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>(initialNavRef.current.route.tab);
+  const [activeNavSection, setActiveNavSection] = useState<NavSection>(
+    initialNavRef.current.route.navSection
+  );
+  const [activeHeroSwitch, setActiveHeroSwitch] = useState<
+    'levels' | 'practice' | 'notes' | 'addText' | null
+  >(() => (initialNavRef.current?.route.navSection === 'levels' ? 'levels' : null));
+  const [selectedLevel, setSelectedLevel] = useLocalStorage<ProficiencyLevel>(
+    `qalam_selected_level_v2::${sessionScope}`,
+    'beginner'
   );
   const [vocabCards, setVocabCards] = useLocalStorage<VocabCard[]>(
     `qalam_vocab_cards_v2::${sessionScope}`,
@@ -287,7 +316,9 @@ export default function App() {
     []
   );
 
-  const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
+  const [activeLessonId, setActiveLessonId] = useState<string | null>(
+    initialNavRef.current.route.lessonId
+  );
   const [practiceScopeRequest, setPracticeScopeRequest] = useState<{
     scope: PracticeScope;
     seq: number;
@@ -318,6 +349,12 @@ export default function App() {
   const inFlightRequests = useRef<Map<string, Promise<WordAnalysis>>>(new Map());
   const levelsSectionRef = useRef<HTMLElement | null>(null);
   const audioToastTimerRef = useRef<number | null>(null);
+  const pendingInitialScrollRef = useRef<number>(initialNavRef.current.restoreScrollY);
+  const hasRestoredInitialScrollRef = useRef<boolean>(
+    initialNavRef.current.restoreScrollY <= 0
+  );
+  const hasInitializedRouteSyncRef = useRef<boolean>(false);
+  const isSyncingFromHistoryRef = useRef<boolean>(false);
 
   useEffect(() => {
     const handleTtsNotice = (event: Event) => {
@@ -486,9 +523,6 @@ export default function App() {
     currentUser?.id,
   ]);
 
-  // Role/Auth Access Control: only signed-in non-guest users can add/manage custom content
-  const canAddContent = Boolean(currentUser && !currentUser.isGuest);
-
   const allLessons = useMemo(
     () => (canAddContent ? [...customLessons, ...SAMPLE_LESSONS] : SAMPLE_LESSONS),
     [canAddContent, customLessons]
@@ -503,6 +537,182 @@ export default function App() {
     () => allLessons.find((l) => l.id === activeLessonId) ?? null,
     [allLessons, activeLessonId]
   );
+
+  // Restore scroll position once after reload layout settles
+  useEffect(() => {
+    if (!currentUser) {
+      hasRestoredInitialScrollRef.current = true;
+      pendingInitialScrollRef.current = 0;
+      return;
+    }
+
+    const targetScrollY = pendingInitialScrollRef.current;
+    if (targetScrollY > 0) {
+      let raf1 = 0;
+      let raf2 = 0;
+      raf1 = window.requestAnimationFrame(() => {
+        raf2 = window.requestAnimationFrame(() => {
+          window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+          pendingInitialScrollRef.current = 0;
+          hasRestoredInitialScrollRef.current = true;
+        });
+      });
+      return () => {
+        window.cancelAnimationFrame(raf1);
+        window.cancelAnimationFrame(raf2);
+      };
+    }
+
+    hasRestoredInitialScrollRef.current = true;
+    if (
+      initialNavRef.current?.route.navSection === 'levels' &&
+      !initialNavRef.current.route.lessonId
+    ) {
+      window.requestAnimationFrame(() => {
+        levelsSectionRef.current?.scrollIntoView({ behavior: 'auto', block: 'start' });
+      });
+    }
+  }, []);
+
+  // Persist active view/lesson route to URL hash and sessionStorage; guard against invalid/logged-out routes
+  useEffect(() => {
+    if (!currentUser) {
+      clearUrlHash();
+      hasInitializedRouteSyncRef.current = false;
+      return;
+    }
+
+    const validLessonIds = new Set(allLessons.map((l) => l.id));
+    const currentRoute: AppNavigationRoute = {
+      tab: activeTab,
+      navSection: activeNavSection,
+      lessonId: activeLessonId,
+    };
+    const validated = validateRouteAgainstLessons(currentRoute, validLessonIds);
+
+    if (validated.fellBack) {
+      setActiveTab(validated.route.tab);
+      setActiveNavSection(validated.route.navSection);
+      setActiveLessonId(validated.route.lessonId);
+      setActiveHeroSwitch(null);
+      setWordSelection(null);
+    }
+
+    const resolvedRoute = validated.route;
+    const targetHash = serializeRouteToHash(resolvedRoute);
+    saveRouteToSession(sessionScope, resolvedRoute);
+
+    if (
+      !hasInitializedRouteSyncRef.current ||
+      validated.fellBack ||
+      isSyncingFromHistoryRef.current
+    ) {
+      syncUrlHash(targetHash, 'replace');
+      hasInitializedRouteSyncRef.current = true;
+      isSyncingFromHistoryRef.current = false;
+    } else {
+      syncUrlHash(targetHash, 'push');
+    }
+  }, [currentUser, sessionScope, activeTab, activeNavSection, activeLessonId, allLessons]);
+
+  // Sync browser Back/Forward hash navigation cleanly with auth & lesson validation
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (!currentUser) {
+        clearUrlHash();
+        setActiveTab('lessons');
+        setActiveNavSection('home');
+        setActiveLessonId(null);
+        setActiveHeroSwitch(null);
+        setWordSelection(null);
+        return;
+      }
+
+      const parsed = parseHashToRoute(window.location.hash);
+      const validLessonIds = new Set(allLessons.map((l) => l.id));
+      let nextRoute: AppNavigationRoute = DEFAULT_NAVIGATION_ROUTE;
+      let shouldReplace = false;
+
+      if (!parsed || !parsed.isValid) {
+        nextRoute = DEFAULT_NAVIGATION_ROUTE;
+        shouldReplace = true;
+      } else {
+        const validated = validateRouteAgainstLessons(parsed.route, validLessonIds);
+        nextRoute = validated.route;
+        shouldReplace = validated.fellBack;
+      }
+
+      const routeChanged =
+        nextRoute.tab !== activeTab ||
+        nextRoute.navSection !== activeNavSection ||
+        nextRoute.lessonId !== activeLessonId;
+
+      if (routeChanged) {
+        isSyncingFromHistoryRef.current = true;
+        setActiveTab(nextRoute.tab);
+        setActiveNavSection(nextRoute.navSection);
+        setActiveLessonId(nextRoute.lessonId);
+        setActiveHeroSwitch(nextRoute.navSection === 'levels' ? 'levels' : null);
+        setWordSelection(null);
+      }
+
+      const nextHash = serializeRouteToHash(nextRoute);
+      if (shouldReplace) {
+        syncUrlHash(nextHash, 'replace');
+      }
+
+      const savedY = readSavedScrollY(sessionScope, nextHash);
+      window.requestAnimationFrame(() => {
+        if (savedY > 0) {
+          window.scrollTo({ top: savedY, behavior: 'auto' });
+        } else if (nextRoute.navSection === 'levels' && !nextRoute.lessonId) {
+          levelsSectionRef.current?.scrollIntoView({ behavior: 'auto', block: 'start' });
+        } else {
+          window.scrollTo({ top: 0, behavior: 'auto' });
+        }
+      });
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [currentUser, sessionScope, allLessons]);
+
+  // Persist scroll position per view in sessionStorage across reloads
+  useEffect(() => {
+    if (!currentUser) return;
+    const routeHash = serializeRouteToHash({
+      tab: activeTab,
+      navSection: activeNavSection,
+      lessonId: activeLessonId,
+    });
+
+    let timer: number | null = null;
+    const flushScroll = () => {
+      if (!hasRestoredInitialScrollRef.current) return;
+      saveScrollY(sessionScope, routeHash, window.scrollY);
+    };
+
+    const handleScroll = () => {
+      if (!hasRestoredInitialScrollRef.current) return;
+      if (timer !== null) return;
+      timer = window.setTimeout(() => {
+        timer = null;
+        flushScroll();
+      }, 150);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('pagehide', flushScroll);
+    window.addEventListener('beforeunload', flushScroll);
+    return () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('pagehide', flushScroll);
+      window.removeEventListener('beforeunload', flushScroll);
+    };
+  }, [currentUser, sessionScope, activeTab, activeNavSection, activeLessonId]);
 
   const vocabStatusMap = useMemo(() => {
     const map = new Map<string, VocabCard['status']>();
@@ -589,9 +799,11 @@ export default function App() {
     if (tab === 'lessons') {
       setActiveLessonId(null);
     }
+    setActiveHeroSwitch(null);
     setActiveTab(tab);
     setActiveNavSection(tab === 'lessons' ? 'home' : tab);
     setWordSelection(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleOpenDifficultPractice = () => {
@@ -683,6 +895,9 @@ export default function App() {
 
   const handleOpenLesson = (lessonId: string) => {
     recordStudyActivity();
+    setActiveHeroSwitch(null);
+    setActiveTab('lessons');
+    setActiveNavSection('home');
     setActiveLessonId(lessonId);
     setWordSelection(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -709,11 +924,13 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    clearNavigationPersistence(sessionScope);
     logoutUser();
     setCurrentUser(null);
     setActiveLessonId(null);
     setActiveTab('lessons');
     setActiveNavSection('home');
+    setActiveHeroSwitch(null);
     setIsAddLessonOpen(false);
     setIsNotesOpen(false);
     setIsUserManagementOpen(false);
@@ -1277,10 +1494,12 @@ export default function App() {
             initialMode={authModalMode}
             onClose={() => setIsAuthModalOpen(false)}
             onAuthenticated={(user) => {
+              clearNavigationPersistence('guest-demo');
               migrateGuestDataToAccount(user.id);
               setCurrentUser(user);
               setActiveTab('lessons');
               setActiveNavSection('home');
+              setActiveHeroSwitch(null);
               setActiveLessonId(null);
               setWordSelection(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1322,7 +1541,9 @@ export default function App() {
                 onSelectWord={handleSelectWord}
                 onBackToList={() => {
                   setActiveLessonId(null);
+                  setActiveNavSection('home');
                   setWordSelection(null);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 onUpdateReadingHistory={handleUpdateReadingHistory}
                 notesCount={studyNotes.length}

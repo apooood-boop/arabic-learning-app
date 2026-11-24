@@ -1666,7 +1666,7 @@ function clearSpeechTimers() {
 function releaseActiveAudio() {
   if (activeFetchController) {
     try {
-      activeFetchController.abort();
+      activeFetchController.abort(new DOMException('Superseded by new audio playback', 'AbortError'));
     } catch {
       // Ignore abort errors
     }
@@ -2346,8 +2346,11 @@ export function speakArabic(
       contentType: string;
     } | null> => {
       const genController = new AbortController();
-      const genTimeoutMs = mode === 'word' ? 7000 : mode === 'example' ? 9000 : 12000;
-      const genTimer = window.setTimeout(() => genController.abort(), genTimeoutMs);
+      const genTimeoutMs = mode === 'word' ? 15000 : mode === 'example' ? 20000 : 25000;
+      const genTimer = window.setTimeout(
+        () => genController.abort(new DOMException('Audio request timed out', 'TimeoutError')),
+        genTimeoutMs
+      );
 
       try {
         // 1. Try backend `/api/tts` first if running on full-stack Node host (non-static)
@@ -2372,7 +2375,8 @@ export function speakArabic(
               markStaticApiTtsUnavailable();
             }
           } catch (serverErr) {
-            if ((serverErr as Error)?.name !== 'AbortError') {
+            const errName = (serverErr as Error)?.name;
+            if (errName !== 'AbortError' && errName !== 'TimeoutError') {
               console.info(
                 '[Qalam Audio] /api/tts unavailable:',
                 serverErr instanceof Error ? serverErr.message : serverErr

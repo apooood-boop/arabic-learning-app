@@ -89,33 +89,55 @@ export function WordContextMenu({
     };
   }, [selection, onClose]);
 
-  const [viewportWidth, setViewportWidth] = useState<number>(() =>
-    typeof window !== 'undefined' ? window.innerWidth : 1200
+  const [viewport, setViewport] = useState<{ width: number; height: number }>(() =>
+    typeof window !== 'undefined'
+      ? { width: window.innerWidth, height: window.innerHeight }
+      : { width: 1200, height: 800 }
   );
 
   useEffect(() => {
-    const handleResize = () => setViewportWidth(window.innerWidth);
+    const handleResize = () =>
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   if (!selection) return null;
 
-  const viewportW = viewportWidth;
-  const viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const viewportW = viewport.width;
+  const viewportH = viewport.height;
   const isMobileSheet = viewportW < 640;
-  const popoverWidth = Math.min(viewportW - 24, mode === 'translation' ? 390 : 304);
+  const popoverWidth = Math.min(viewportW - 24, mode === 'translation' ? 410 : 316);
 
   let left = selection.anchorRect.left + selection.anchorRect.width / 2 - popoverWidth / 2;
   left = Math.max(12, Math.min(left, viewportW - popoverWidth - 12));
 
-  const estimatedHeight = mode === 'translation' ? 360 : 196;
-  const spaceBelow = viewportH - selection.anchorRect.bottom;
-  const placeAbove = spaceBelow < estimatedHeight && selection.anchorRect.top > estimatedHeight;
+  const preferredHeight = mode === 'translation' ? 420 : 204;
+  const spaceBelow = Math.max(0, viewportH - selection.anchorRect.bottom - 12);
+  const spaceAbove = Math.max(0, selection.anchorRect.top - 12);
+  const placeAbove = spaceBelow < Math.min(preferredHeight, 320) && spaceAbove > spaceBelow;
 
-  const top = placeAbove
-    ? Math.max(12, selection.anchorRect.top - estimatedHeight - 10)
-    : Math.min(viewportH - estimatedHeight - 12, selection.anchorRect.bottom + 10);
+  const desktopPositionStyle = placeAbove
+    ? {
+        position: 'fixed' as const,
+        bottom: `${Math.max(12, viewportH - selection.anchorRect.top + 10)}px`,
+        left: `${left}px`,
+        width: `${popoverWidth}px`,
+        maxHeight: `${Math.max(220, Math.min(Math.round(viewportH * 0.82), spaceAbove - 10))}px`,
+      }
+    : (() => {
+        const computedTop = Math.max(
+          12,
+          Math.min(selection.anchorRect.bottom + 10, viewportH - 232)
+        );
+        return {
+          position: 'fixed' as const,
+          top: `${computedTop}px`,
+          left: `${left}px`,
+          width: `${popoverWidth}px`,
+          maxHeight: `${Math.max(220, Math.min(Math.round(viewportH * 0.82), viewportH - computedTop - 12))}px`,
+        };
+      })();
 
   const handlePlayAudio = (text: string, target: 'word' | number) => {
     unlockArabicAudioContext();
@@ -212,20 +234,11 @@ export function WordContextMenu({
         ref={popoverRef}
         role="dialog"
         aria-label="Arabic word actions"
-        style={
-          isMobileSheet
-            ? undefined
-            : {
-                position: 'fixed',
-                top: `${top}px`,
-                left: `${left}px`,
-                width: `${popoverWidth}px`,
-              }
-        }
+        style={isMobileSheet ? undefined : desktopPositionStyle}
         className={
           isMobileSheet
-            ? 'animate-popover-in fixed inset-x-0 bottom-0 z-50 rounded-t-3xl border-t border-[#DCE5D3] bg-[#FAFBF8]/98 backdrop-blur-md shadow-2xl shadow-[#182111]/25 pb-[max(0.75rem,env(safe-area-inset-bottom))] max-h-[82dvh] flex flex-col'
-            : 'animate-popover-in z-50 rounded-2xl border border-[#DCE5D3] bg-white/98 backdrop-blur-md shadow-2xl shadow-[#182111]/18 max-h-[82vh] flex flex-col'
+            ? 'animate-popover-in fixed inset-x-0 bottom-0 z-50 rounded-t-3xl border-t border-[#DCE5D3] bg-[#FAFBF8]/98 backdrop-blur-md shadow-2xl shadow-[#182111]/25 max-h-[85dvh] flex flex-col overflow-hidden'
+            : 'animate-popover-in z-50 rounded-2xl border border-[#DCE5D3] bg-white/98 backdrop-blur-md shadow-2xl shadow-[#182111]/18 flex flex-col overflow-hidden'
         }
       >
         {isMobileSheet && (
@@ -284,19 +297,19 @@ export function WordContextMenu({
 
         {/* Menu mode */}
         {mode === 'menu' && (
-          <div className="p-2.5 sm:p-2 space-y-1.5 sm:space-y-1">
+          <div className={`p-2.5 sm:p-2 space-y-1.5 sm:space-y-1 ${isMobileSheet ? 'pb-[max(0.75rem,env(safe-area-inset-bottom))]' : ''}`}>
             <button
               type="button"
               onClick={onTranslate}
               className="flex w-full min-h-[44px] items-center justify-between gap-3 rounded-xl px-3.5 py-2.5 text-left text-sm font-semibold text-[#1F2718] hover:bg-[#EEF2E9] transition-colors cursor-pointer touch-manipulation"
             >
-              <span className="flex items-center gap-2.5">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#FBF3DC] text-[#9A6F14]">
+              <span className="flex items-center gap-2.5 min-w-0">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#FBF3DC] text-[#9A6F14]">
                   <Languages className="h-4 w-4" aria-hidden="true" />
                 </span>
-                <span>Translate</span>
+                <span className="truncate">Translate</span>
               </span>
-              <span dir="rtl" lang="ar" className="font-arabic-cairo text-xs font-semibold text-[#5A6552]">
+              <span dir="rtl" lang="ar" className="font-arabic-cairo shrink-0 text-xs font-semibold text-[#5A6552]">
                 ترجمة
               </span>
             </button>
@@ -307,8 +320,8 @@ export function WordContextMenu({
               disabled={savingVocab}
               className="flex w-full min-h-[44px] items-center justify-between gap-3 rounded-xl px-3.5 py-2.5 text-left text-sm font-semibold text-[#1F2718] hover:bg-[#EEF2E9] disabled:opacity-60 transition-colors cursor-pointer touch-manipulation"
             >
-              <span className="flex items-center gap-2.5">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#EEF2E9] text-[#2D3B22]">
+              <span className="flex items-center gap-2.5 min-w-0">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#EEF2E9] text-[#2D3B22]">
                   {savingVocab ? (
                     <Loader2 className="h-4 w-4 animate-spin text-[#D4A338]" aria-hidden="true" />
                   ) : isAlreadySaved ? (
@@ -317,10 +330,12 @@ export function WordContextMenu({
                     <BookmarkPlus className="h-4 w-4 text-[#2D3B22]" aria-hidden="true" />
                   )}
                 </span>
-                <span>{isAlreadySaved ? 'Saved in Vocabulary' : 'Add to My Vocabulary'}</span>
+                <span className="truncate">
+                  {isAlreadySaved ? 'Saved in Flashcards' : 'Add to Flashcards'}
+                </span>
               </span>
-              <span dir="rtl" lang="ar" className="font-arabic-cairo text-xs font-semibold text-[#5A6552]">
-                إضافة للمفردات
+              <span dir="rtl" lang="ar" className="font-arabic-cairo shrink-0 text-xs font-semibold text-[#5A6552]">
+                أضف للبطاقات
               </span>
             </button>
 
@@ -330,131 +345,148 @@ export function WordContextMenu({
           </div>
         )}
 
-        {/* Translation mode with Loading Skeleton & Polysemy Contexts */}
+        {/* Translation & Examples mode with scrollable body and always-visible sticky footer */}
         {mode === 'translation' && (
-          <div className="p-4 space-y-3.5 overflow-y-auto overscroll-contain">
-            {loading ? (
-              <div className="space-y-3 py-1" aria-busy="true" aria-label="Loading translation">
-                <div className="flex items-center gap-2">
-                  <div className="h-3 w-16 rounded bg-[#EEF2E9] animate-pulse" />
-                  <div className="h-3 w-20 rounded bg-[#EEF2E9] animate-pulse" />
-                </div>
-                <div className="h-5 w-3/4 rounded bg-[#DCE5D3] animate-pulse" />
-                <div className="h-9 w-full rounded-lg bg-[#EEF2E9] animate-pulse" />
-              </div>
-            ) : error ? (
-              <div className="space-y-2.5">
-                <p className="text-xs text-amber-950 bg-[#FEF2E8] border border-orange-200 rounded-lg p-2.5">{error}</p>
-                <button
-                  type="button"
-                  onClick={onTranslate}
-                  className="text-xs font-semibold text-[#2D3B22] hover:underline cursor-pointer"
-                >
-                  Try again
-                </button>
-              </div>
-            ) : analysis ? (
-              <>
-                {analysis.notice && (
-                  <p className="rounded-lg border border-amber-200 bg-[#FBF3DC]/70 px-3 py-1.5 text-[11px] font-medium text-[#7A560B]">
-                    {analysis.notice}
-                  </p>
-                )}
-
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-[#5A6552]">
-                    <span className="font-semibold text-[#2D3B22]">{analysis.partOfSpeech}</span>
-                    {analysis.transliteration && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-mono">{analysis.transliteration}</span>
-                      </>
-                    )}
+          <>
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3.5">
+              {loading ? (
+                <div className="space-y-3 py-1" aria-busy="true" aria-label="Loading translation">
+                  <div className="flex items-center gap-2">
+                    <div className="h-3 w-16 rounded bg-[#EEF2E9] animate-pulse" />
+                    <div className="h-3 w-20 rounded bg-[#EEF2E9] animate-pulse" />
                   </div>
-
-                  <p className="text-base font-bold text-[#1F2718] leading-snug">
-                    {analysis.englishMeaning}
-                  </p>
+                  <div className="h-5 w-3/4 rounded bg-[#DCE5D3] animate-pulse" />
+                  <div className="h-9 w-full rounded-lg bg-[#EEF2E9] animate-pulse" />
                 </div>
+              ) : error ? (
+                <div className="space-y-2.5">
+                  <p className="text-xs text-amber-950 bg-[#FEF2E8] border border-orange-200 rounded-lg p-2.5">{error}</p>
+                  <button
+                    type="button"
+                    onClick={onTranslate}
+                    className="text-xs font-semibold text-[#2D3B22] hover:underline cursor-pointer"
+                  >
+                    Try again
+                  </button>
+                </div>
+              ) : analysis ? (
+                <>
+                  {analysis.notice && (
+                    <p className="rounded-lg border border-amber-200 bg-[#FBF3DC]/70 px-3 py-1.5 text-[11px] font-medium text-[#7A560B]">
+                      {analysis.notice}
+                    </p>
+                  )}
 
-                {/* Contextual & Polysemous Real-Life Sentences */}
-                {analysis.examples?.length > 0 && (
                   <div className="space-y-2">
-                    {analysis.examples.slice(0, 2).map((ex, idx) => {
-                      const isPlaying = speakingTarget === idx;
-                      return (
-                        <div
-                          key={idx}
-                          className="rounded-xl bg-[#FAFBF8] border border-[#DCE5D3] px-3 py-2.5 space-y-1"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#9A6F14]">
-                              {ex.contextLabel || (idx === 0 ? 'Everyday Context' : 'Alternate Meaning')}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handlePlayAudio(ex.arabic, idx)}
-                              aria-label={`Listen to example ${idx + 1}`}
-                              className={`inline-flex h-8 w-8 sm:h-6 sm:w-6 items-center justify-center rounded-md transition-all cursor-pointer touch-manipulation ${
-                                isPlaying
-                                  ? 'bg-[#2D3B22] text-[#E8B948] ring-2 ring-[#DCE5D3]'
-                                  : 'text-[#9A6F14] hover:bg-[#FBF3DC]'
-                              }`}
-                            >
-                              {isPlaying && audioPhase === 'loading' ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                              ) : (
-                                <Volume2
-                                  className={`h-3.5 w-3.5 ${isPlaying ? 'animate-pulse' : ''}`}
-                                  aria-hidden="true"
-                                />
-                              )}
-                            </button>
-                          </div>
-                          <p dir="rtl" lang="ar" className="font-arabic-scheherazade text-lg text-[#1F2718] leading-[2.0]">
-                            {applySmartPartialTashkeel(ex.arabic)}
-                          </p>
-                          <p className="text-xs text-[#5A6552] leading-relaxed">{ex.english}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                <div className="border-t border-[#DCE5D3] pt-3 flex items-center justify-between gap-2">
-                  {isAlreadySaved || justSaved ? (
-                    <button
-                      type="button"
-                      onClick={onOpenVocabulary}
-                      className="inline-flex min-h-[40px] sm:min-h-0 items-center gap-1.5 text-xs font-semibold text-[#2D3B22] hover:text-[#3E522D] hover:underline cursor-pointer touch-manipulation"
-                    >
-                      <CheckCircle2 className="h-4 w-4 text-[#D4A338]" aria-hidden="true" />
-                      <span>Saved · Open 3D Flashcard</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={onAddToVocabulary}
-                      disabled={savingVocab}
-                      className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl bg-[#2D3B22] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#3E522D] disabled:opacity-60 transition-colors cursor-pointer touch-manipulation active:scale-[0.98]"
-                    >
-                      {savingVocab ? (
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-[#5A6552]">
+                      <span className="font-semibold text-[#2D3B22]">{analysis.partOfSpeech}</span>
+                      {analysis.transliteration && (
                         <>
-                          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E8B948]" aria-hidden="true" />
-                          <span>Building 3D Flashcard...</span>
-                        </>
-                      ) : (
-                        <>
-                          <BookmarkPlus className="h-3.5 w-3.5 text-[#E8B948]" aria-hidden="true" />
-                          <span>Add to My Vocabulary · إضافة للمفردات</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono">{analysis.transliteration}</span>
                         </>
                       )}
-                    </button>
+                    </div>
+
+                    <p className="text-base font-bold text-[#1F2718] leading-snug">
+                      {analysis.englishMeaning}
+                    </p>
+                  </div>
+
+                  {/* Contextual & Polysemous Real-Life Sentences */}
+                  {analysis.examples?.length > 0 && (
+                    <div className="space-y-2">
+                      {analysis.examples.slice(0, 2).map((ex, idx) => {
+                        const isPlaying = speakingTarget === idx;
+                        return (
+                          <div
+                            key={idx}
+                            className="rounded-xl bg-[#FAFBF8] border border-[#DCE5D3] px-3 py-2.5 space-y-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-[#9A6F14]">
+                                {ex.contextLabel || (idx === 0 ? 'Everyday Context' : 'Alternate Meaning')}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handlePlayAudio(ex.arabic, idx)}
+                                aria-label={`Listen to example ${idx + 1}`}
+                                className={`inline-flex h-8 w-8 sm:h-6 sm:w-6 items-center justify-center rounded-md transition-all cursor-pointer touch-manipulation ${
+                                  isPlaying
+                                    ? 'bg-[#2D3B22] text-[#E8B948] ring-2 ring-[#DCE5D3]'
+                                    : 'text-[#9A6F14] hover:bg-[#FBF3DC]'
+                                }`}
+                              >
+                                {isPlaying && audioPhase === 'loading' ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                                ) : (
+                                  <Volume2
+                                    className={`h-3.5 w-3.5 ${isPlaying ? 'animate-pulse' : ''}`}
+                                    aria-hidden="true"
+                                  />
+                                )}
+                              </button>
+                            </div>
+                            <p dir="rtl" lang="ar" className="font-arabic-scheherazade text-lg text-[#1F2718] leading-[2.0]">
+                              {applySmartPartialTashkeel(ex.arabic)}
+                            </p>
+                            <p className="text-xs text-[#5A6552] leading-relaxed">{ex.english}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
-                </div>
-              </>
-            ) : null}
-          </div>
+                </>
+              ) : null}
+            </div>
+
+            {/* Sticky Footer: always accessible & visible while scrolling translation or examples */}
+            <div
+              className={`shrink-0 border-t border-[#DCE5D3] bg-[#FAFBF8]/95 px-4 pt-3 ${
+                isMobileSheet ? 'pb-[max(0.75rem,env(safe-area-inset-bottom))]' : 'pb-3'
+              }`}
+            >
+              {isAlreadySaved || justSaved ? (
+                <button
+                  type="button"
+                  onClick={onOpenVocabulary}
+                  className="inline-flex min-h-[42px] w-full items-center justify-between gap-2 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9]/70 px-3.5 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] transition-colors cursor-pointer touch-manipulation"
+                >
+                  <span className="inline-flex items-center gap-1.5 min-w-0">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-[#D4A338]" aria-hidden="true" />
+                    <span className="truncate">Saved · Open 3D Flashcard</span>
+                  </span>
+                  <span dir="rtl" lang="ar" className="font-arabic-cairo shrink-0 text-[11px] font-bold text-[#3E522D]">
+                    عرض البطاقة
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onAddToVocabulary}
+                  disabled={savingVocab}
+                  className="inline-flex min-h-[44px] w-full items-center justify-between gap-3 rounded-xl bg-[#2D3B22] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#3E522D] disabled:opacity-60 transition-colors cursor-pointer touch-manipulation active:scale-[0.98]"
+                >
+                  {savingVocab ? (
+                    <span className="inline-flex w-full items-center justify-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E8B948]" aria-hidden="true" />
+                      <span>Building 3D Flashcard...</span>
+                    </span>
+                  ) : (
+                    <>
+                      <span dir="ltr" className="inline-flex items-center gap-2 min-w-0">
+                        <BookmarkPlus className="h-3.5 w-3.5 shrink-0 text-[#E8B948]" aria-hidden="true" />
+                        <span className="truncate">Add to Flashcards</span>
+                      </span>
+                      <span dir="rtl" lang="ar" className="font-arabic-cairo shrink-0 text-[11px] font-semibold text-[#FEF08A]">
+                        أضف للبطاقات
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </>
         )}
       </div>
     </>

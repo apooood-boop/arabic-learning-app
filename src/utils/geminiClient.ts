@@ -28,9 +28,13 @@ import {
 } from './arabic';
 import {
   fetchGeminiGenerateContent,
+  GeminiRestResult,
   getClientGeminiApiKey,
+  isGeminiModelUnavailable,
+  markGeminiModelUnavailable,
   notifyGeminiQuotaNotice,
   parseGeminiQuotaInfo,
+  resetGeminiRoutingCaches,
 } from './geminiAuth';
 
 export { getClientGeminiApiKey };
@@ -39,11 +43,168 @@ const GEMINI_API_COOLDOWN_KEY = 'qalam_gemini_text_cooldown_until';
 const GEMINI_QUOTA_REASON_KEY = 'qalam_gemini_text_quota_reason';
 const GEMINI_RESPONSE_CACHE_KEY = 'qalam_gemini_response_cache_v1';
 const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_FALLBACK_LITE_MODEL = 'gemini-2.5-flash-lite';
+const GEMINI_TEXT_MODEL_CHAIN = [
+  GEMINI_MODEL,
+  GEMINI_FALLBACK_LITE_MODEL,
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+] as const;
+const GEMINI_FETCH_TIMEOUT_MS = 30000;
 const MAX_MEMORY_RESPONSE_CACHE = 200;
 const MAX_PERSISTENT_RESPONSE_CACHE = 90;
 
 let memoryCooldownUntil = 0;
 let memoryQuotaNotice: string | null = null;
+
+function createTimeoutController(timeoutMs = GEMINI_FETCH_TIMEOUT_MS): {
+  controller: AbortController;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timer =
+    typeof window !== 'undefined'
+      ? window.setTimeout(
+          () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
+          timeoutMs
+        )
+      : setTimeout(
+          () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
+          timeoutMs
+        );
+  return {
+    controller,
+    cleanup: () => clearTimeout(timer),
+  };
+}
+
+function isTimeoutOrAbortError(err: unknown): boolean {
+  if (err instanceof DOMException) {
+    return err.name === 'TimeoutError' || err.name === 'AbortError';
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return /timed out|timeout|abort/i.test(msg);
+}
+
+function isTransient503OrUnavailable(status: number, errorBody: string): boolean {
+  return (
+    status === 503 ||
+    /"status"\s*:\s*"UNAVAILABLE"|high demand|currently unavailable|temporarily unavailable/i.test(
+      errorBody
+    )
+  );
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window !== 'undefined') {
+      window.setTimeout(resolve, ms);
+    } else {
+      setTimeout(resolve, ms);
+    }
+  });
+}
+
+async function executeGeminiWithRetryAndFallback(params: {
+  payload: unknown;
+  apiKey?: string;
+  timeoutMs?: number;
+  logPrefix: string;
+}): Promise<{ result: GeminiRestResult; modelUsed: string }> {
+  const timeoutMs = params.timeoutMs ?? GEMINI_FETCH_TIMEOUT_MS;
+  const availableModels = GEMINI_TEXT_MODEL_CHAIN.filter((m) => !isGeminiModelUnavailable(m));
+  const candidateModels =
+    availableModels.length > 0
+      ? availableModels
+      : ([GEMINI_FALLBACK_LITE_MODEL, 'gemini-3.5-flash-lite'] as const);
+
+  let lastResult: GeminiRestResult | null = null;
+  let lastModelUsed: string = candidateModels[0];
+  let lastError: unknown = null;
+
+  for (let i = 0; i < candidateModels.length; i++) {
+    const model = candidateModels[i];
+    if (isGeminiModelUnavailable(model)) {
+      continue;
+    }
+
+    const maxAttemptsForModel = model === GEMINI_MODEL ? 2 : 1;
+
+    for (let attempt = 1; attempt <= maxAttemptsForModel; attempt++) {
+      const { controller, cleanup } = createTimeoutController(timeoutMs);
+      try {
+        const res = await fetchGeminiGenerateContent({
+          model,
+          apiKey: params.apiKey,
+          signal: controller.signal,
+          logPrefix: params.logPrefix,
+          payload: params.payload,
+        });
+
+        const activeModel = res.modelUsed || model;
+        lastResult = res;
+        lastModelUsed = activeModel;
+
+        if (res.response.ok) {
+          return { result: res, modelUsed: activeModel };
+        }
+
+        const status = res.response.status;
+        if (status === 401 || status === 403 || status === 429) {
+          return { result: res, modelUsed: activeModel };
+        }
+
+        if (status === 404) {
+          markGeminiModelUnavailable(activeModel);
+          break;
+        }
+
+        if (isTransient503OrUnavailable(status, res.errorBody)) {
+          if (attempt < maxAttemptsForModel) {
+            console.warn(
+              `[${params.logPrefix}] ${activeModel} returned HTTP ${status} (UNAVAILABLE); retrying briefly...`
+            );
+            await sleepMs(650);
+            continue;
+          }
+          const nextModel = candidateModels.slice(i + 1).find((m) => !isGeminiModelUnavailable(m));
+          if (nextModel) {
+            console.warn(
+              `[${params.logPrefix}] ${activeModel} unavailable (HTTP ${status}); falling back to ${nextModel}.`
+            );
+            await sleepMs(350);
+          }
+          break;
+        }
+
+        return { result: res, modelUsed: activeModel };
+      } catch (err) {
+        lastError = err;
+        lastModelUsed = model;
+        const timedOut = isTimeoutOrAbortError(err);
+        if (timedOut) {
+          const nextModel = candidateModels.slice(i + 1).find((m) => !isGeminiModelUnavailable(m));
+          if (nextModel) {
+            console.warn(
+              `[${params.logPrefix}] ${model} timed out after ${Math.round(timeoutMs / 1000)}s; falling back to ${nextModel}.`
+            );
+            await sleepMs(300);
+            break;
+          }
+          throw err;
+        }
+        throw err;
+      } finally {
+        cleanup();
+      }
+    }
+  }
+
+  if (lastResult) {
+    return { result: lastResult, modelUsed: lastModelUsed };
+  }
+  throw lastError instanceof Error ? lastError : new Error('Gemini request failed.');
+}
 
 interface StoredGeminiEntry {
   value: unknown;
@@ -204,7 +365,9 @@ export function getGeminiTextDiagnosticsSnapshot(): GeminiTextDiagnosticsSnapsho
     if (
       val &&
       typeof val.englishMeaning === 'string' &&
-      val.englishMeaning.startsWith('Contextual Arabic word')
+      (val.englishMeaning.startsWith('Contextual Arabic word') ||
+        val.englishMeaning.startsWith('Contextual translation for') ||
+        val.englishMeaning.includes('Live AI translation is temporarily busy'))
     ) {
       placeholderEntriesInResponseCache += 1;
     }
@@ -223,6 +386,7 @@ export function getGeminiTextDiagnosticsSnapshot(): GeminiTextDiagnosticsSnapsho
 export function clearGeminiCooldowns(): void {
   memoryCooldownUntil = 0;
   memoryQuotaNotice = null;
+  resetGeminiRoutingCaches();
   if (typeof window !== 'undefined') {
     try {
       window.sessionStorage?.removeItem(GEMINI_API_COOLDOWN_KEY);
@@ -316,7 +480,10 @@ export function isFakePlaceholderTranslation(
   return (
     !meaning ||
     meaning.startsWith('Contextual Arabic word') ||
-    meaning.startsWith('Translation pending')
+    meaning.startsWith('Contextual translation for') ||
+    meaning.startsWith('Translation pending') ||
+    meaning.includes('Live AI translation is temporarily busy') ||
+    meaning.includes('الترجمة الآلية مشغولة مؤقتًا')
   );
 }
 
@@ -510,17 +677,10 @@ async function generateGeminiJson<T>(params: {
   if (!apiKey) return null;
   if (Date.now() < getCooldownUntil()) return null;
 
-  const controller = new AbortController();
-  const timer =
-    typeof window !== 'undefined'
-      ? window.setTimeout(() => controller.abort(), params.timeoutMs ?? 6500)
-      : setTimeout(() => controller.abort(), params.timeoutMs ?? 6500);
-
   try {
-    const { response, errorBody, url } = await fetchGeminiGenerateContent({
-      model: GEMINI_MODEL,
+    const { result, modelUsed } = await executeGeminiWithRetryAndFallback({
       apiKey,
-      signal: controller.signal,
+      timeoutMs: params.timeoutMs ?? GEMINI_FETCH_TIMEOUT_MS,
       logPrefix: 'Gemini Client',
       payload: {
         systemInstruction: {
@@ -539,6 +699,8 @@ async function generateGeminiJson<T>(params: {
       },
     });
 
+    const { response, errorBody, url } = result;
+
     if (!response.ok) {
       let extractedMessage = '';
       try {
@@ -549,7 +711,8 @@ async function generateGeminiJson<T>(params: {
       } catch {
         // not json
       }
-      const targetUrl = url || `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+      const targetUrl =
+        url || `https://generativelanguage.googleapis.com/v1beta/models/${modelUsed}:generateContent`;
       const detail = extractedMessage || errorBody || response.statusText;
       console.error(
         `[Gemini Client] Request to ${targetUrl} failed (HTTP ${response.status} ${response.statusText}): ${detail}`
@@ -584,12 +747,10 @@ async function generateGeminiJson<T>(params: {
     return JSON.parse(cleanJsonString(rawText)) as T;
   } catch (err) {
     console.error(
-      `[Gemini Client] Request to ${GEMINI_MODEL} threw error:`,
+      `[Gemini Client] Request failed:`,
       err instanceof Error ? err.message : err
     );
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -650,17 +811,10 @@ Return JSON with:
 - englishMeaning: accurate English translation and brief contextual meaning if needed.
 - examples: 2 natural Arabic sentences strictly calibrated to the ${targetLevel} level with Smart Partial Tashkeel, English translation, and contextLabel.`;
 
-    const controller = new AbortController();
-    const timer =
-      typeof window !== 'undefined'
-        ? window.setTimeout(() => controller.abort(), 8500)
-        : setTimeout(() => controller.abort(), 8500);
-
     try {
-      const { response, errorBody } = await fetchGeminiGenerateContent({
-        model: GEMINI_MODEL,
+      const { result, modelUsed } = await executeGeminiWithRetryAndFallback({
         apiKey,
-        signal: controller.signal,
+        timeoutMs: GEMINI_FETCH_TIMEOUT_MS,
         logPrefix: 'Qalam Translation',
         payload: {
           systemInstruction: {
@@ -716,9 +870,11 @@ Return JSON with:
         },
       });
 
+      const { response, errorBody } = result;
+
       if (!response.ok) {
         console.error(
-          `[Qalam Translation] ${GEMINI_MODEL} error HTTP ${response.status} ${response.statusText}:`,
+          `[Qalam Translation] ${modelUsed} error HTTP ${response.status} ${response.statusText}:`,
           errorBody
         );
 
@@ -784,12 +940,9 @@ Return JSON with:
       setCachedGeminiResult(cacheKey, parsedResult);
       return parsedResult;
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const isTimeout =
-        (err instanceof DOMException && err.name === 'AbortError') ||
-        /abort|timeout/i.test(errMsg);
+      const isTimeout = isTimeoutOrAbortError(err);
       console.warn(
-        `[Qalam Translation] Request to ${GEMINI_MODEL} failed, using built-in analysis:`,
+        `[Qalam Translation] Request failed, using built-in analysis:`,
         err
       );
 
@@ -798,8 +951,6 @@ Return JSON with:
         : 'Gemini translation service temporarily unavailable — showing built-in Arabic analysis.';
 
       return buildResilientWordAnalysis(trimmedWord, trimmedContext, userMessage, targetLevel);
-    } finally {
-      clearTimeout(timer);
     }
   })();
 
@@ -863,7 +1014,7 @@ Rules:
     prompt,
     systemInstruction:
       'You are an Arabic reading comprehension assessment designer. Return exactly 3 grounded multiple-choice questions in compact JSON.',
-    timeoutMs: 6000,
+    timeoutMs: GEMINI_FETCH_TIMEOUT_MS,
     responseSchema: {
       type: 'OBJECT',
       properties: {
@@ -934,8 +1085,8 @@ export async function fetchYouTubeOEmbedClient(youtubeUrl: string): Promise<{
   }
 
   let suggestedTitle = '';
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3500);
+  const { controller, cleanup } = createTimeoutController(8000);
+  const timerCleanup = cleanup;
 
   try {
     const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -950,7 +1101,7 @@ export async function fetchYouTubeOEmbedClient(youtubeUrl: string): Promise<{
   } catch {
     // Ignore CORS or network failures gracefully
   } finally {
-    clearTimeout(timer);
+    timerCleanup();
   }
 
   return {
@@ -1026,7 +1177,7 @@ Rules:
 - Also provide descriptionEn: a concise 1-sentence English summary.`,
         systemInstruction:
           'You are an Arabic editor. Format pasted transcripts faithfully with Smart Partial Tashkeel without inventing dialogue.',
-        timeoutMs: 8000,
+        timeoutMs: GEMINI_FETCH_TIMEOUT_MS,
         responseSchema: {
           type: 'OBJECT',
           properties: {
@@ -1086,7 +1237,7 @@ ${cleanText.slice(0, 1800)}
 """`,
       systemInstruction:
         'You are an Arabic curriculum editor. Return a 1-sentence English description in JSON.',
-      timeoutMs: 3500,
+      timeoutMs: GEMINI_FETCH_TIMEOUT_MS,
       responseSchema: {
         type: 'OBJECT',
         properties: {
@@ -1187,7 +1338,7 @@ Requirements:
     prompt,
     systemInstruction:
       'You are an Arabic assessment designer creating crisp, pedagogical, textbook-quality Modern Standard Arabic exams.',
-    timeoutMs: 9000,
+    timeoutMs: GEMINI_FETCH_TIMEOUT_MS,
     responseSchema: {
       type: 'OBJECT',
       properties: {
@@ -1348,7 +1499,7 @@ Requirements:
     prompt,
     systemInstruction:
       'You are a native Modern Standard Arabic conversation coach creating authentic, expressive dialogues with Smart Partial Tashkeel.',
-    timeoutMs: 9000,
+    timeoutMs: GEMINI_FETCH_TIMEOUT_MS,
     responseSchema: {
       type: 'OBJECT',
       properties: {
@@ -1473,17 +1624,10 @@ export async function extractArabicTextFromImageClient(params: {
     );
   }
 
-  const controller = new AbortController();
-  const timer =
-    typeof window !== 'undefined'
-      ? window.setTimeout(() => controller.abort(), 16000)
-      : setTimeout(() => controller.abort(), 16000);
-
   try {
-    const { response, errorBody, errorMessage } = await fetchGeminiGenerateContent({
-      model: GEMINI_MODEL,
+    const { result } = await executeGeminiWithRetryAndFallback({
       apiKey: apiKey || undefined,
-      signal: controller.signal,
+      timeoutMs: GEMINI_FETCH_TIMEOUT_MS,
       logPrefix: 'Qalam Photo OCR',
       payload: {
         systemInstruction: {
@@ -1511,6 +1655,8 @@ export async function extractArabicTextFromImageClient(params: {
         ],
       },
     });
+
+    const { response, errorBody, errorMessage } = result;
 
     if (!response.ok) {
       if (response.status === 429 || /RESOURCE_EXHAUSTED|quota|rate[- ]?limit/i.test(errorBody)) {
@@ -1551,11 +1697,9 @@ export async function extractArabicTextFromImageClient(params: {
 
     return pureArabic;
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if (isTimeoutOrAbortError(err)) {
       throw new Error('انتهت مهلة قراءة الصورة · Photo OCR request timed out. Please try again.');
     }
     throw err instanceof Error ? err : new Error(String(err));
-  } finally {
-    clearTimeout(timer);
   }
 }

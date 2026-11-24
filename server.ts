@@ -2096,6 +2096,14 @@ Requirements:
   }
 });
 
+const SERVER_TEXT_MODEL_FALLBACK_ORDER = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+];
+const serverUnavailableGeminiModels = new Set<string>();
+
 // Secure Server-Side Gemini Proxy Route for all client AI calls
 app.post('/api/gemini/generateContent', async (req, res) => {
   const rawBody = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
@@ -2114,44 +2122,85 @@ app.post('/api/gemini/generateContent', async (req, res) => {
           return copy;
         })();
 
-  const apiKey =
+  const usingClientOverride = Boolean(
     clientApiKey && clientApiKey.trim() && clientApiKey.trim() !== 'MY_GEMINI_API_KEY'
-      ? clientApiKey.trim()
-      : getConfiguredApiKey();
+  );
+  const apiKey = usingClientOverride ? clientApiKey!.trim() : getConfiguredApiKey();
 
   if (!apiKey) {
     return res.status(500).json({ error: { message: 'Server Gemini API key not configured.' } });
   }
 
-  const modelName = (model || 'gemini-2.5-flash').replace(/^models\//, '');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
+  const requestedModel = (model || 'gemini-2.5-flash').replace(/^models\//, '');
+  const isTextFallbackModel = SERVER_TEXT_MODEL_FALLBACK_ORDER.includes(requestedModel);
+
+  const candidateModels = isTextFallbackModel
+    ? [
+        requestedModel,
+        ...SERVER_TEXT_MODEL_FALLBACK_ORDER.filter((m) => m !== requestedModel),
+      ].filter((m) => usingClientOverride || !serverUnavailableGeminiModels.has(m))
+    : [requestedModel];
+
+  const modelsToTry =
+    candidateModels.length > 0 ? candidateModels : ['gemini-3.5-flash-lite', 'gemini-3.8-flash'];
+
+  const isOAuthToken = apiKey.startsWith('ya29.');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'aistudio-build',
+  };
+
+  if (isOAuthToken) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  } else {
+    headers['x-goog-api-key'] = apiKey;
+  }
+
+  let lastStatus = 502;
+  let lastBody = '';
 
   try {
-    const isOAuthToken = apiKey.startsWith('ya29.');
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'User-Agent': 'aistudio-build',
-    };
+    for (const modelName of modelsToTry) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
+      const upstream = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload || {}),
+      });
 
-    if (isOAuthToken) {
-      headers['Authorization'] = `Bearer ${apiKey}`;
-    } else {
-      headers['x-goog-api-key'] = apiKey;
-    }
+      const responseText = await upstream.text().catch(() => '');
+      if (upstream.ok) {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('X-Qalam-Gemini-Model', modelName);
+        return res.send(responseText);
+      }
 
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload || {}),
-    });
+      lastStatus = upstream.status;
+      lastBody = responseText;
 
-    const responseText = await upstream.text().catch(() => '');
-    if (!upstream.ok) {
+      if (upstream.status === 404 && isTextFallbackModel) {
+        if (!usingClientOverride) {
+          serverUnavailableGeminiModels.add(modelName);
+        }
+        continue;
+      }
+
+      if (
+        (upstream.status === 503 || /"status"\s*:\s*"UNAVAILABLE"/i.test(responseText)) &&
+        isTextFallbackModel
+      ) {
+        continue;
+      }
+
       return res.status(upstream.status).send(responseText);
     }
 
-    res.setHeader('Content-Type', 'application/json');
-    return res.send(responseText);
+    return res.status(lastStatus).send(
+      lastBody ||
+        JSON.stringify({
+          error: { message: 'All configured Gemini text models were temporarily unavailable.' },
+        })
+    );
   } catch (err) {
     console.error('[Gemini Proxy Server] Error proxying generateContent:', err);
     const errMsg = err instanceof Error ? err.message : String(err);

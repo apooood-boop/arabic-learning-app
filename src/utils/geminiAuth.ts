@@ -11,6 +11,61 @@ export function getAdminGeminiApiKeyOverride(): string | null {
   }
 }
 
+const TEXT_MODEL_FALLBACK_ORDER = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+] as const;
+
+let proxyRouteUnavailable = false;
+const unavailableGeminiModels = new Set<string>();
+
+export function resetGeminiRoutingCaches(): void {
+  proxyRouteUnavailable = false;
+  unavailableGeminiModels.clear();
+}
+
+export function isGeminiModelUnavailable(model: string): boolean {
+  return unavailableGeminiModels.has((model || '').replace(/^models\//, '').trim());
+}
+
+export function markGeminiModelUnavailable(model: string): void {
+  const clean = (model || '').replace(/^models\//, '').trim();
+  if (clean) {
+    unavailableGeminiModels.add(clean);
+  }
+}
+
+function isTextFallbackModel(model: string): boolean {
+  return (TEXT_MODEL_FALLBACK_ORDER as readonly string[]).includes(model);
+}
+
+function pickAvailableTextModel(preferredModel: string, exclude: Set<string> = new Set()): string | null {
+  const startIdx = TEXT_MODEL_FALLBACK_ORDER.indexOf(
+    preferredModel as (typeof TEXT_MODEL_FALLBACK_ORDER)[number]
+  );
+  const searchList =
+    startIdx >= 0
+      ? TEXT_MODEL_FALLBACK_ORDER.slice(startIdx)
+      : TEXT_MODEL_FALLBACK_ORDER;
+
+  for (const candidate of searchList) {
+    if (!unavailableGeminiModels.has(candidate) && !exclude.has(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isGeminiModelNotFound404(status: number, bodyText: string): boolean {
+  if (status !== 404) return false;
+  return (
+    /"status"\s*:\s*"NOT_FOUND"/i.test(bodyText) ||
+    /models\/[^\s"]+.*(?:not found|no longer available|not supported)/i.test(bodyText)
+  );
+}
+
 export function setAdminGeminiApiKeyOverride(key: string | null): void {
   if (typeof window === 'undefined') return;
   try {
@@ -19,6 +74,7 @@ export function setAdminGeminiApiKeyOverride(key: string | null): void {
     } else {
       window.localStorage.setItem(ADMIN_KEY_OVERRIDE_STORAGE_KEY, key.trim());
     }
+    resetGeminiRoutingCaches();
     window.dispatchEvent(new CustomEvent('qalam:gemini-key-changed'));
   } catch {
     // Ignore storage errors
@@ -96,6 +152,7 @@ export interface GeminiRestResult {
   errorBody: string;
   errorMessage?: string;
   url: string;
+  modelUsed?: string;
 }
 
 export async function fetchGeminiGenerateContent(params: {
@@ -103,133 +160,193 @@ export async function fetchGeminiGenerateContent(params: {
   apiKey?: string;
   payload: unknown;
   signal?: AbortSignal;
+  timeoutMs?: number;
   logPrefix?: string;
-  _retriedFallbackModel?: boolean;
+  _attemptedModels?: string[];
 }): Promise<GeminiRestResult> {
   const logPrefix = params.logPrefix || 'Gemini API';
-  const cleanModel = (params.model || 'gemini-2.5-flash').replace(/^models\//, '');
+  const requestedModel = (params.model || 'gemini-2.5-flash').replace(/^models\//, '');
+  const attempted = new Set(params._attemptedModels || []);
+
+  let effectiveModel = requestedModel;
+  if (isTextFallbackModel(requestedModel) && unavailableGeminiModels.has(requestedModel)) {
+    const nextHealthy = pickAvailableTextModel(requestedModel, attempted);
+    if (nextHealthy) {
+      effectiveModel = nextHealthy;
+    }
+  }
+  attempted.add(effectiveModel);
+
   const proxyUrl = '/api/gemini/generateContent';
-  const targetGoogleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent`;
+  const targetGoogleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:generateContent`;
   const cleanKey = (params.apiKey || getClientGeminiApiKey() || '').trim();
   const bodyJson = JSON.stringify({
-    model: cleanModel,
+    model: effectiveModel,
     payload: params.payload,
     apiKey: cleanKey || undefined,
   });
 
+  // Own timeout controller if caller did not supply a signal
+  let ownController: AbortController | null = null;
+  let ownTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let effectiveSignal = params.signal;
+  if (!effectiveSignal) {
+    ownController = new AbortController();
+    const timeoutMs = params.timeoutMs ?? 30000;
+    ownTimer = globalThis.setTimeout(
+      () => ownController?.abort(new DOMException('Request timed out', 'TimeoutError')),
+      timeoutMs
+    );
+    effectiveSignal = ownController.signal;
+  }
+
+  const callDirectGoogle = async (reasonStatus?: number): Promise<GeminiRestResult> => {
+    if (!cleanKey) {
+      const status = reasonStatus === 404 ? 404 : 405;
+      const missingRouteBody = JSON.stringify({
+        error: {
+          message: `Server route POST /api/gemini/generateContent returned HTTP ${status} and no client API key is configured.`,
+        },
+      });
+      return {
+        response: new Response(missingRouteBody, {
+          status,
+          statusText: status === 404 ? 'Not Found' : 'Method Not Allowed',
+          headers: { 'Content-Type': 'application/json' },
+        }),
+        errorBody: missingRouteBody,
+        errorMessage: `Server route POST /api/gemini/generateContent returned HTTP ${status} and no client API key is configured.`,
+        url: targetGoogleUrl,
+        modelUsed: effectiveModel,
+      };
+    }
+
+    try {
+      const directHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (cleanKey.startsWith('ya29.')) {
+        directHeaders['Authorization'] = `Bearer ${cleanKey}`;
+      } else {
+        directHeaders['x-goog-api-key'] = cleanKey;
+      }
+
+      const directRes = await fetch(targetGoogleUrl, {
+        method: 'POST',
+        signal: effectiveSignal,
+        headers: directHeaders,
+        body: JSON.stringify(params.payload || {}),
+      });
+      if (directRes.ok) {
+        return {
+          response: directRes,
+          errorBody: '',
+          url: targetGoogleUrl,
+          modelUsed: effectiveModel,
+        };
+      }
+
+      const directErr = await directRes.text().catch(() => '');
+      if (isGeminiModelNotFound404(directRes.status, directErr)) {
+        markGeminiModelUnavailable(effectiveModel);
+        if (isTextFallbackModel(effectiveModel)) {
+          const nextModel = pickAvailableTextModel(effectiveModel, attempted);
+          if (nextModel) {
+            return fetchGeminiGenerateContent({
+              ...params,
+              model: nextModel,
+              _attemptedModels: Array.from(attempted),
+            });
+          }
+        }
+      }
+
+      let directMsg = '';
+      try {
+        const parsedDirect = JSON.parse(directErr) as { error?: { message?: string } };
+        directMsg = parsedDirect?.error?.message || '';
+      } catch {
+        // ignore
+      }
+      return {
+        response: directRes,
+        errorBody: directErr,
+        errorMessage: directMsg || directErr,
+        url: targetGoogleUrl,
+        modelUsed: effectiveModel,
+      };
+    } catch (directNetworkErr) {
+      if (
+        directNetworkErr instanceof DOMException &&
+        (directNetworkErr.name === 'TimeoutError' || directNetworkErr.name === 'AbortError')
+      ) {
+        throw directNetworkErr;
+      }
+      const fallbackMsg =
+        directNetworkErr instanceof Error
+          ? directNetworkErr.message
+          : String(directNetworkErr);
+      const deployHint = `Direct Gemini request failed: ${fallbackMsg}`;
+      return {
+        response: new Response(JSON.stringify({ error: { message: deployHint } }), {
+          status: 503,
+          statusText: 'Service Unavailable',
+        }),
+        errorBody: deployHint,
+        errorMessage: deployHint,
+        url: targetGoogleUrl,
+        modelUsed: effectiveModel,
+      };
+    }
+  };
+
   try {
+    if (proxyRouteUnavailable) {
+      return await callDirectGoogle(405);
+    }
+
     const res = await fetch(proxyUrl, {
       method: 'POST',
-      signal: params.signal,
+      signal: effectiveSignal,
       headers: {
         'Content-Type': 'application/json',
       },
       body: bodyJson,
     });
 
+    const headerModelUsed = res.headers.get('X-Qalam-Gemini-Model') || effectiveModel;
+
     if (res.ok) {
-      return { response: res, errorBody: '', url: targetGoogleUrl };
-    }
-
-    // If Cloudflare Worker static host returned 405 (Worker route not yet deployed),
-    // cleanly fall back to direct Google endpoint when a client API key is available.
-    if (res.status === 405) {
-      console.warn(
-        `[${logPrefix}] Worker route POST /api/gemini/generateContent returned HTTP 405 (route needs deployment).`
-      );
-      if (cleanKey) {
-        try {
-          const directHeaders: Record<string, string> = {
-            'Content-Type': 'application/json',
-          };
-          if (cleanKey.startsWith('ya29.')) {
-            directHeaders['Authorization'] = `Bearer ${cleanKey}`;
-          } else {
-            directHeaders['x-goog-api-key'] = cleanKey;
-          }
-          const directRes = await fetch(targetGoogleUrl, {
-            method: 'POST',
-            signal: params.signal,
-            headers: directHeaders,
-            body: JSON.stringify(params.payload || {}),
-          });
-          if (directRes.ok) {
-            return { response: directRes, errorBody: '', url: targetGoogleUrl };
-          }
-          const directErr = await directRes.text().catch(() => '');
-          if (
-            directRes.status === 404 &&
-            cleanModel === 'gemini-2.5-flash' &&
-            !params._retriedFallbackModel
-          ) {
-            return fetchGeminiGenerateContent({
-              ...params,
-              model: 'gemini-3.8-flash',
-              _retriedFallbackModel: true,
-            });
-          }
-          let directMsg = '';
-          try {
-            const parsedDirect = JSON.parse(directErr) as { error?: { message?: string } };
-            directMsg = parsedDirect?.error?.message || '';
-          } catch {
-            // ignore
-          }
-          return {
-            response: directRes,
-            errorBody: directErr,
-            errorMessage: directMsg || directErr,
-            url: targetGoogleUrl,
-          };
-        } catch (directNetworkErr) {
-          const fallbackMsg =
-            directNetworkErr instanceof Error
-              ? directNetworkErr.message
-              : String(directNetworkErr);
-          const deployHint = `Worker /api/gemini/generateContent returned 405 and direct fallback failed: ${fallbackMsg}`;
-          return {
-            response: new Response(JSON.stringify({ error: { message: deployHint } }), {
-              status: 405,
-              statusText: 'Method Not Allowed',
-            }),
-            errorBody: deployHint,
-            errorMessage: deployHint,
-            url: targetGoogleUrl,
-          };
-        }
-      }
-
-      const missingRouteBody = JSON.stringify({
-        error: {
-          message:
-            'Cloudflare Worker route POST /api/gemini/generateContent returned HTTP 405 and needs deployment.',
-        },
-      });
       return {
-        response: new Response(missingRouteBody, {
-          status: 405,
-          statusText: 'Method Not Allowed',
-          headers: { 'Content-Type': 'application/json' },
-        }),
-        errorBody: missingRouteBody,
-        errorMessage:
-          'Cloudflare Worker route POST /api/gemini/generateContent returned HTTP 405 and needs deployment.',
+        response: res,
+        errorBody: '',
         url: targetGoogleUrl,
+        modelUsed: headerModelUsed,
       };
     }
 
+    if (res.status === 405) {
+      proxyRouteUnavailable = true;
+      console.warn(
+        `[${logPrefix}] Worker route POST /api/gemini/generateContent returned HTTP 405; using direct fallback when client key is present.`
+      );
+      return await callDirectGoogle(405);
+    }
+
     const errorBody = await res.text().catch(() => '');
-    if (
-      res.status === 404 &&
-      cleanModel === 'gemini-2.5-flash' &&
-      !params._retriedFallbackModel &&
-      /no longer available|not found|not supported/i.test(errorBody)
-    ) {
-      return fetchGeminiGenerateContent({
-        ...params,
-        model: 'gemini-3.8-flash',
-        _retriedFallbackModel: true,
-      });
+
+    if (res.status === 404 && isGeminiModelNotFound404(404, errorBody)) {
+      markGeminiModelUnavailable(effectiveModel);
+      if (isTextFallbackModel(effectiveModel)) {
+        const nextModel = pickAvailableTextModel(effectiveModel, attempted);
+        if (nextModel) {
+          return await fetchGeminiGenerateContent({
+            ...params,
+            model: nextModel,
+            _attemptedModels: Array.from(attempted),
+          });
+        }
+      }
     }
 
     let errorMessage = '';
@@ -247,8 +364,20 @@ export async function fetchGeminiGenerateContent(params: {
       `[${logPrefix}] Server Gemini proxy failed (HTTP ${res.status}): ${detailMsg}`
     );
 
-    return { response: res, errorBody, errorMessage, url: targetGoogleUrl };
+    return {
+      response: res,
+      errorBody,
+      errorMessage,
+      url: targetGoogleUrl,
+      modelUsed: headerModelUsed,
+    };
   } catch (err) {
+    if (
+      err instanceof DOMException &&
+      (err.name === 'TimeoutError' || err.name === 'AbortError')
+    ) {
+      throw err;
+    }
     const errorBody = err instanceof Error ? err.message : String(err);
     console.error(`[${logPrefix}] Network error contacting server Gemini proxy:`, errorBody);
     return {
@@ -256,7 +385,12 @@ export async function fetchGeminiGenerateContent(params: {
       errorBody,
       errorMessage: errorBody,
       url: targetGoogleUrl,
+      modelUsed: effectiveModel,
     };
+  } finally {
+    if (ownTimer !== null) {
+      clearTimeout(ownTimer);
+    }
   }
 }
 

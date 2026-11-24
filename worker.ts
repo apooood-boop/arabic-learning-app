@@ -30,6 +30,13 @@ function getTrimmedKey(raw?: unknown): string {
   return trimmed && trimmed !== 'MY_GEMINI_API_KEY' ? trimmed : '';
 }
 
+const WORKER_TEXT_MODEL_FALLBACK_ORDER = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+];
+
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
@@ -76,7 +83,7 @@ export default {
         );
       }
 
-      const rawModel =
+      const requestedModel =
         typeof rawBody.model === 'string' && rawBody.model.trim()
           ? rawBody.model.trim().replace(/^models\//, '')
           : 'gemini-2.5-flash';
@@ -91,7 +98,14 @@ export default {
               return copy;
             })();
 
-      const upstreamUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(rawModel)}:generateContent`;
+      const isTextFallbackModel = WORKER_TEXT_MODEL_FALLBACK_ORDER.includes(requestedModel);
+      const modelsToTry = isTextFallbackModel
+        ? [
+            requestedModel,
+            ...WORKER_TEXT_MODEL_FALLBACK_ORDER.filter((m) => m !== requestedModel),
+          ]
+        : [requestedModel];
+
       const upstreamHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
       };
@@ -102,23 +116,68 @@ export default {
         upstreamHeaders['x-goog-api-key'] = apiKey;
       }
 
+      let lastStatus = 502;
+      let lastText = '';
+      let lastContentType = 'application/json; charset=utf-8';
+
       try {
-        const upstream = await fetch(upstreamUrl, {
-          method: 'POST',
-          headers: upstreamHeaders,
-          body: JSON.stringify(forwardPayload || {}),
-        });
+        for (const modelName of modelsToTry) {
+          const upstreamUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
+          const upstream = await fetch(upstreamUrl, {
+            method: 'POST',
+            headers: upstreamHeaders,
+            body: JSON.stringify(forwardPayload || {}),
+          });
 
-        const text = await upstream.text().catch(() => '');
-        const contentType = upstream.headers.get('Content-Type') || 'application/json; charset=utf-8';
+          const text = await upstream.text().catch(() => '');
+          const contentType = upstream.headers.get('Content-Type') || 'application/json; charset=utf-8';
 
-        return new Response(text, {
-          status: upstream.status,
-          headers: {
-            'Content-Type': contentType,
-            ...CORS_HEADERS,
-          },
-        });
+          if (upstream.ok) {
+            return new Response(text, {
+              status: upstream.status,
+              headers: {
+                'Content-Type': contentType,
+                'X-Qalam-Gemini-Model': modelName,
+                ...CORS_HEADERS,
+              },
+            });
+          }
+
+          lastStatus = upstream.status;
+          lastText = text;
+          lastContentType = contentType;
+
+          if (
+            isTextFallbackModel &&
+            (upstream.status === 404 ||
+              upstream.status === 503 ||
+              /"status"\s*:\s*"UNAVAILABLE"/i.test(text))
+          ) {
+            continue;
+          }
+
+          return new Response(text, {
+            status: upstream.status,
+            headers: {
+              'Content-Type': contentType,
+              ...CORS_HEADERS,
+            },
+          });
+        }
+
+        return new Response(
+          lastText ||
+            JSON.stringify({
+              error: { message: 'All Gemini text models were temporarily unavailable.' },
+            }),
+          {
+            status: lastStatus,
+            headers: {
+              'Content-Type': lastContentType,
+              ...CORS_HEADERS,
+            },
+          }
+        );
       } catch (err) {
         return jsonResponse(
           {
