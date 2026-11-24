@@ -108,26 +108,53 @@ input,
   background-size: 80px 80px;
 }
 
-/* Buttery Smooth 3D Flashcard Flip Utilities */
+/* Buttery Smooth 3D Flashcard Flip Utilities (crisp text without subpixel blur) */
 .perspective-1400 {
   perspective: 1400px;
 }
 
-.transform-style-3d {
+.transform-style-3d,
+.card-flip {
   transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+  will-change: transform;
 }
 
 .backface-hidden {
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+  -webkit-font-smoothing: antialiased;
 }
 
 .rotate-y-180 {
   transform: rotateY(180deg);
 }
 
-.flashcard-transition {
-  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+.backface-hidden.rotate-y-180 {
+  transform: rotateY(180deg) translateZ(0);
+}
+
+.flashcard-transition,
+.card-flip {
+  transition: transform 0.52s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes subtleCardReveal {
+  0% {
+    opacity: 0;
+    transform: perspective(900px) rotateX(-8deg) translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(900px) rotateX(0deg) translateY(0);
+  }
+}
+
+.animate-card-reveal {
+  animation: subtleCardReveal 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Entrance & Micro-Animation Keyframes */
@@ -306,8 +333,10 @@ input,
 
 @media (prefers-reduced-motion: reduce) {
   .flashcard-transition,
+  .card-flip,
   .qalam-switch-btn,
   .animate-fade-slide-up,
+  .animate-card-reveal,
   .animate-popover-in,
   .animate-game-shake,
   .animate-game-pop,

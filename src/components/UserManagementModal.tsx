@@ -47,13 +47,16 @@ import {
   type AutoRepairReport,
   type LiveToolTestResult,
 } from '../utils/adminDiagnostics';
-import { stopArabicSpeech } from '../utils/arabic';
+import { clearAllArabicAudioCaches, stopArabicSpeech } from '../utils/arabic';
 import {
   getGeminiApiKeyInfo,
   setAdminGeminiApiKeyOverride,
   type GeminiApiKeyInfo,
 } from '../utils/geminiAuth';
-import { clearGeminiResponseCaches } from '../utils/geminiClient';
+import {
+  clearGeminiCooldowns,
+  clearGeminiResponseCaches,
+} from '../utils/geminiClient';
 import {
   adminDeleteUser,
   adminResetUserPassword,
@@ -137,6 +140,8 @@ export function UserManagementModal({
     setApiKeyMessage(null);
     try {
       setAdminGeminiApiKeyOverride(trimmed);
+      clearGeminiCooldowns();
+      clearAllArabicAudioCaches();
       refreshApiKeyInfo();
       setCustomApiKeyInput('');
       setApiKeyMessage('تم حفظ مفتاح Gemini المخصص بنجاح! · Custom Gemini API key saved successfully.');
@@ -152,6 +157,8 @@ export function UserManagementModal({
     setApiKeyMessage(null);
     try {
       setAdminGeminiApiKeyOverride(null);
+      clearGeminiCooldowns();
+      clearAllArabicAudioCaches();
       refreshApiKeyInfo();
       setCustomApiKeyInput('');
       setApiKeyMessage('تم العودة إلى مفتاح البيئة الافتراضي · Reset to environment variable key.');
@@ -165,6 +172,7 @@ export function UserManagementModal({
     setApiKeyMessage(null);
     try {
       clearGeminiResponseCaches();
+      clearAllArabicAudioCaches();
       refreshApiKeyInfo();
       setApiKeyMessage('تم مسح وقت الانتظار (Cooldown) وجاري اختبار الاتصال...');
       refreshHealth();
@@ -513,7 +521,7 @@ export function UserManagementModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="animate-popover-in w-full max-w-3xl rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
+      <div className="animate-popover-in w-full max-w-4xl rounded-2xl border border-[#DCE5D3] bg-[#FAFBF8] shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Dark Olive Green Header with Lemon-Gold Accent */}
         <div className="relative overflow-hidden flex items-center justify-between gap-3 border-b border-[#3E522D] bg-[linear-gradient(135deg,#24301B_0%,#3B4D2B_100%)] px-5 sm:px-6 py-4 text-[#FAFBF8] shrink-0">
           <div className="islamic-geo-pattern pointer-events-none absolute inset-0 opacity-30" />
@@ -982,116 +990,6 @@ export function UserManagementModal({
               </div>
             </div>
 
-            {/* Primary Admin Only: Gemini API Key Manager Card */}
-            {isPrimaryAdmin && (
-              <div className="rounded-2xl border-2 border-[#D4A338]/60 bg-gradient-to-br from-white via-[#FAFBF8] to-[#FBF3DC]/40 p-4 space-y-3.5 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#DCE5D3] pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#16200F] text-[#FACC15] shadow-2xs">
-                      <KeyRound className="h-4 w-4" aria-hidden="true" />
-                    </span>
-                    <div>
-                      <h4 className="text-xs sm:text-sm font-bold text-[#1F2718] flex items-center gap-2">
-                        <span>Gemini API Key Manager</span>
-                        <span className="rounded-md bg-[#16200F] px-2 py-0.5 font-mono text-[10px] text-[#FEF08A]">
-                          Primary Admin Only
-                        </span>
-                      </h4>
-                      <p className="text-[11px] text-[#5A6552]">
-                        Active Source: <strong className="text-[#2D3B22]">{apiKeyInfo.source}</strong> · Length: <span className="font-mono">{apiKeyInfo.length}</span> chars
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-[#EEF2E9] px-2.5 py-1 font-mono text-xs font-bold text-[#2D3B22] border border-[#DCE5D3]">
-                      {apiKeyInfo.masked}
-                    </span>
-                  </div>
-                </div>
-
-                {apiKeyMessage && (
-                  <div className="rounded-xl border border-[#3B4D2B]/30 bg-[#EEF2E9] px-3.5 py-2 text-xs font-medium text-[#2D3B22]">
-                    {apiKeyMessage}
-                  </div>
-                )}
-
-                <form onSubmit={handleSaveApiKeyOverride} className="space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <label htmlFor="custom-gemini-key" className="text-xs font-semibold text-[#1F2718]">
-                      Set Custom Gemini API Key Override (saved to localStorage):
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowCustomApiKey((prev) => !prev)}
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#5A6552] hover:text-[#2D3B22] cursor-pointer"
-                    >
-                      {showCustomApiKey ? (
-                        <>
-                          <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>Hide</span>
-                        </>
-                      ) : (
-                        <>
-                          <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>Show</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-
-                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
-                    <div className="relative flex-1">
-                      <KeyRound
-                        className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6B7861]"
-                        aria-hidden="true"
-                      />
-                      <input
-                        id="custom-gemini-key"
-                        type={showCustomApiKey ? 'text' : 'password'}
-                        value={customApiKeyInput}
-                        onChange={(e) => setCustomApiKeyInput(e.target.value)}
-                        placeholder="Paste custom API key or AQ... token here"
-                        className="w-full rounded-xl border border-[#DCE5D3] bg-white pl-8 pr-3 py-2 font-mono text-xs text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none focus:ring-2 focus:ring-[#FACC15]/40"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={savingApiKey || !customApiKeyInput.trim()}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-4 py-2 text-xs font-bold text-white hover:brightness-110 disabled:opacity-50 cursor-pointer whitespace-nowrap"
-                    >
-                      <Sparkles className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
-                      <span>{savingApiKey ? 'Saving...' : 'Save Override'}</span>
-                    </button>
-                  </div>
-                </form>
-
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#DCE5D3]/80 pt-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {apiKeyInfo.hasOverride && (
-                      <button
-                        type="button"
-                        onClick={handleResetToEnvApiKey}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-[#FEF7E6] px-3 py-1.5 text-xs font-semibold text-[#7C4A03] hover:bg-amber-100 cursor-pointer"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Reset to Env</span>
-                      </button>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleResetCooldownAndTest}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#2D3B22] px-3.5 py-1.5 text-xs font-bold text-[#FACC15] hover:brightness-110 shadow-xs cursor-pointer"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Reset Cooldown &amp; Test</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Health Cards Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {/* Gemini API Key & Quota Card */}
@@ -1338,123 +1236,241 @@ export function UserManagementModal({
               )}
             </div>
 
-            {/* Live Tool Testers */}
-            <div className="rounded-2xl border border-[#DCE5D3] bg-white p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="text-xs font-bold text-[#1F2718]">
-                  Live Tool Testers · اختبار الأدوات مباشرة
-                </h4>
-                <div className="flex items-center gap-2">
-                  <label htmlFor="diag-sample-word" className="text-[11px] text-[#5A6552]">
-                    Test Arabic Input:
-                  </label>
-                  <input
-                    id="diag-sample-word"
-                    dir="rtl"
-                    lang="ar"
-                    type="text"
-                    value={testWordInput}
-                    onChange={(e) => setTestWordInput(e.target.value)}
-                    className="w-36 rounded-lg border border-[#DCE5D3] bg-[#FAFBF8] px-2.5 py-1 font-arabic-scheherazade text-base text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none"
-                  />
+            {/* Live Tool Testers + Primary Admin Gemini API Key Manager Side-by-Side */}
+            <div className={isPrimaryAdmin ? 'grid grid-cols-1 lg:grid-cols-2 gap-4 items-start' : ''}>
+              {/* Live Tool Testers */}
+              <div className="rounded-2xl border border-[#DCE5D3] bg-white p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold text-[#1F2718]">
+                    Live Tool Testers · اختبار الأدوات مباشرة
+                  </h4>
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="diag-sample-word" className="text-[11px] text-[#5A6552]">
+                      Test Arabic Input:
+                    </label>
+                    <input
+                      id="diag-sample-word"
+                      dir="rtl"
+                      lang="ar"
+                      type="text"
+                      value={testWordInput}
+                      onChange={(e) => setTestWordInput(e.target.value)}
+                      className="w-32 rounded-lg border border-[#DCE5D3] bg-[#FAFBF8] px-2.5 py-1 font-arabic-scheherazade text-base text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none"
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={runningTest !== null}
-                  onClick={handleRunSupabasePing}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
-                >
-                  {runningTest === 'supabase_ping' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Database className="h-3.5 w-3.5 text-[#3B4D2B]" aria-hidden="true" />
-                  )}
-                  <span>Ping Supabase · فحص سوبابيز</span>
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={runningTest !== null}
+                    onClick={handleRunSupabasePing}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
+                  >
+                    {runningTest === 'supabase_ping' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Database className="h-3.5 w-3.5 text-[#3B4D2B]" aria-hidden="true" />
+                    )}
+                    <span>Ping Supabase · فحص سوبابيز</span>
+                  </button>
 
-                <button
-                  type="button"
-                  disabled={runningTest !== null}
-                  onClick={handleRunGeminiPing}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
-                >
-                  {runningTest === 'gemini_ping' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Activity className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
-                  )}
-                  <span>Ping Gemini API · فحص الاتصال</span>
-                </button>
+                  <button
+                    type="button"
+                    disabled={runningTest !== null}
+                    onClick={handleRunGeminiPing}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
+                  >
+                    {runningTest === 'gemini_ping' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Activity className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+                    )}
+                    <span>Ping Gemini API · فحص الاتصال</span>
+                  </button>
 
-                <button
-                  type="button"
-                  disabled={runningTest !== null}
-                  onClick={handleRunTranslationTest}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
-                >
-                  {runningTest === 'translation' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Languages className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
-                  )}
-                  <span>Test Translation · اختبار الترجمة</span>
-                </button>
+                  <button
+                    type="button"
+                    disabled={runningTest !== null}
+                    onClick={handleRunTranslationTest}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
+                  >
+                    {runningTest === 'translation' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Languages className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+                    )}
+                    <span>Test Translation · اختبار الترجمة</span>
+                  </button>
 
-                <button
-                  type="button"
-                  disabled={runningTest !== null}
-                  onClick={handleRunAudioTest}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
-                >
-                  {runningTest === 'audio' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Volume2 className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
-                  )}
-                  <span>Test Audio Path · اختبار الصوت</span>
-                </button>
+                  <button
+                    type="button"
+                    disabled={runningTest !== null}
+                    onClick={handleRunAudioTest}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
+                  >
+                    {runningTest === 'audio' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Volume2 className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+                    )}
+                    <span>Test Audio Path · اختبار الصوت</span>
+                  </button>
 
-                <button
-                  type="button"
-                  disabled={runningTest !== null}
-                  onClick={handleRunEditCacheTest}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
-                >
-                  <RefreshCw className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
-                  <span>Test Edit &amp; Cache · اختبار التعديل والكاش</span>
-                </button>
+                  <button
+                    type="button"
+                    disabled={runningTest !== null}
+                    onClick={handleRunEditCacheTest}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] disabled:opacity-60 cursor-pointer"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
+                    <span>Test Edit &amp; Cache · اختبار التعديل والكاش</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setShowSqlViewer(true)}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#3B4D2B]/35 bg-[#16200F] px-3 py-2 text-xs font-semibold text-[#FACC15] hover:bg-[#233018] cursor-pointer"
-                >
-                  <FileCode className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>سكيما سوبابيز SQL Schema</span>
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSqlViewer(true)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#3B4D2B]/35 bg-[#16200F] px-3 py-2 text-xs font-semibold text-[#FACC15] hover:bg-[#233018] cursor-pointer"
+                  >
+                    <FileCode className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>سكيما سوبابيز SQL Schema</span>
+                  </button>
+                </div>
 
-              {testResults.length > 0 && (
-                <div className="space-y-2 pt-1">
-                  {testResults.map((res) => (
-                    <div
-                      key={res.tool}
-                      className={`rounded-xl border px-3.5 py-2.5 text-xs ${
-                        res.ok
-                          ? 'border-[#3B4D2B]/30 bg-[#EEF2E9]/60 text-[#1F2718]'
-                          : 'border-amber-300 bg-[#FEF7E6] text-[#7C4A03]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 font-bold">
-                        <span>{res.summary}</span>
-                        <span className="font-mono text-[10px] opacity-80">{res.durationMs}ms</span>
+                {testResults.length > 0 && (
+                  <div className="space-y-2 pt-1">
+                    {testResults.map((res) => (
+                      <div
+                        key={res.tool}
+                        className={`rounded-xl border px-3.5 py-2.5 text-xs ${
+                          res.ok
+                            ? 'border-[#3B4D2B]/30 bg-[#EEF2E9]/60 text-[#1F2718]'
+                            : 'border-amber-300 bg-[#FEF7E6] text-[#7C4A03]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 font-bold">
+                          <span>{res.summary}</span>
+                          <span className="font-mono text-[10px] opacity-80">{res.durationMs}ms</span>
+                        </div>
+                        <p className="mt-1 text-[11px] opacity-90">{res.details}</p>
                       </div>
-                      <p className="mt-1 text-[11px] opacity-90">{res.details}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Primary Admin Only: Gemini API Key Manager Card (Side-by-Side Next to Diagnostic Tool) */}
+              {isPrimaryAdmin && (
+                <div className="rounded-2xl border-2 border-[#D4A338]/60 bg-gradient-to-br from-white via-[#FAFBF8] to-[#FBF3DC]/40 p-4 space-y-3.5 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-[#DCE5D3] pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#16200F] text-[#FACC15] shadow-2xs">
+                        <KeyRound className="h-4 w-4" aria-hidden="true" />
+                      </span>
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-bold text-[#1F2718] flex flex-wrap items-center gap-1.5">
+                          <span>Gemini API Key Manager</span>
+                          <span className="rounded-md bg-[#16200F] px-2 py-0.5 font-mono text-[10px] text-[#FEF08A]">
+                            Primary Admin Only
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-[#5A6552]">
+                          Source: <strong className="text-[#2D3B22]">{apiKeyInfo.source}</strong> · Length:{' '}
+                          <span className="font-mono font-semibold">{apiKeyInfo.length}</span> chars
+                        </p>
+                      </div>
                     </div>
-                  ))}
+
+                    <span className="rounded-lg bg-[#EEF2E9] px-2.5 py-1 font-mono text-[11px] font-bold text-[#2D3B22] border border-[#DCE5D3]">
+                      {apiKeyInfo.masked}
+                    </span>
+                  </div>
+
+                  {apiKeyMessage && (
+                    <div className="rounded-xl border border-[#3B4D2B]/30 bg-[#EEF2E9] px-3 py-2 text-xs font-medium text-[#2D3B22]">
+                      {apiKeyMessage}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSaveApiKeyOverride} className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <label htmlFor="custom-gemini-key" className="text-xs font-semibold text-[#1F2718]">
+                        Custom API Key Override (localStorage):
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowCustomApiKey((prev) => !prev)}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#5A6552] hover:text-[#2D3B22] cursor-pointer"
+                      >
+                        {showCustomApiKey ? (
+                          <>
+                            <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Hide</span>
+                          </>
+                        ) : (
+                          <>
+                            <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Show</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                      <div className="relative flex-1 min-w-0">
+                        <KeyRound
+                          className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#6B7861]"
+                          aria-hidden="true"
+                        />
+                        <input
+                          id="custom-gemini-key"
+                          type={showCustomApiKey ? 'text' : 'password'}
+                          value={customApiKeyInput}
+                          onChange={(e) => setCustomApiKeyInput(e.target.value)}
+                          placeholder="Paste Gemini API key (e.g. AIza... or AQ...)"
+                          className="w-full rounded-xl border border-[#DCE5D3] bg-white pl-8 pr-3 py-2 font-mono text-xs text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none focus:ring-2 focus:ring-[#FACC15]/40"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={savingApiKey || !customApiKeyInput.trim()}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-3.5 py-2 text-xs font-bold text-white hover:brightness-110 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                        <span>{savingApiKey ? 'Saving...' : 'Save Key'}</span>
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#DCE5D3]/80 pt-3">
+                    <div>
+                      {apiKeyInfo.hasOverride && (
+                        <button
+                          type="button"
+                          onClick={handleResetToEnvApiKey}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-[#FEF7E6] px-3 py-1.5 text-xs font-semibold text-[#7C4A03] hover:bg-amber-100 cursor-pointer"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          <span>Reset to Env</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={runningTest !== null}
+                      onClick={() => {
+                        void handleResetCooldownAndTest();
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#2D3B22] px-3.5 py-1.5 text-xs font-bold text-[#FACC15] hover:brightness-110 disabled:opacity-60 shadow-xs cursor-pointer"
+                    >
+                      <RefreshCw
+                        className={`h-3.5 w-3.5 ${runningTest === 'gemini_ping' ? 'animate-spin' : ''}`}
+                        aria-hidden="true"
+                      />
+                      <span>Reset Cooldown &amp; Test</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

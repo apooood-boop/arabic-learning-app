@@ -220,6 +220,25 @@ export function getGeminiTextDiagnosticsSnapshot(): GeminiTextDiagnosticsSnapsho
   };
 }
 
+export function clearGeminiCooldowns(): void {
+  memoryCooldownUntil = 0;
+  memoryQuotaNotice = null;
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage?.removeItem(GEMINI_API_COOLDOWN_KEY);
+      window.sessionStorage?.removeItem(GEMINI_QUOTA_REASON_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('qalam:gemini-key-changed', () => {
+    clearGeminiCooldowns();
+  });
+}
+
 export function clearGeminiResponseCaches(): {
   clearedMemory: number;
   clearedPersistent: number;
@@ -227,8 +246,7 @@ export function clearGeminiResponseCaches(): {
   const clearedMemory = memoryResponseCache.size;
   memoryResponseCache.clear();
   inFlightClientTasks.clear();
-  memoryCooldownUntil = 0;
-  memoryQuotaNotice = null;
+  clearGeminiCooldowns();
 
   let clearedPersistent = 0;
   if (typeof window !== 'undefined') {
@@ -245,12 +263,6 @@ export function clearGeminiResponseCaches(): {
       } catch {
         // Ignore storage errors
       }
-    }
-    try {
-      window.sessionStorage?.removeItem(GEMINI_API_COOLDOWN_KEY);
-      window.sessionStorage?.removeItem(GEMINI_QUOTA_REASON_KEY);
-    } catch {
-      // Ignore storage errors
     }
   }
 
@@ -1424,4 +1436,126 @@ Requirements:
   };
   setCachedGeminiResult(cacheKey, convResult);
   return convResult;
+}
+
+function sanitizeExtractedArabicOnlyText(rawText: string): string {
+  const stripped = stripMarkdownFormatting(rawText)
+    .replace(/\u200B|\u200E|\u200F/g, '')
+    .trim();
+  if (!stripped) return '';
+
+  const keptLines = stripped
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) return false;
+      // Keep only lines containing Arabic characters
+      return /[\u0600-\u06FF]/.test(line);
+    })
+    .map((line) =>
+      // Remove any leading non-Arabic English labels like "Text:" or "Arabic:"
+      line.replace(/^[A-Za-z0-9\s._\-–—:|]+(?=\s*[\u0600-\u06FF])/, '').trim()
+    )
+    .filter((line) => /[\u0600-\u06FF]/.test(line));
+
+  return keptLines.join('\n').trim();
+}
+
+export async function extractArabicTextFromImageClient(params: {
+  base64Data: string;
+  mimeType: string;
+}): Promise<string> {
+  const apiKey = getClientGeminiApiKey();
+  if (Date.now() < getCooldownUntil()) {
+    throw new Error(
+      getActiveQuotaNotice() ||
+        'خدمة استخراج النص في فترة انتظار مؤقتة حاليًا. حاول مرة أخرى بعد قليل.'
+    );
+  }
+
+  const controller = new AbortController();
+  const timer =
+    typeof window !== 'undefined'
+      ? window.setTimeout(() => controller.abort(), 16000)
+      : setTimeout(() => controller.abort(), 16000);
+
+  try {
+    const { response, errorBody, errorMessage } = await fetchGeminiGenerateContent({
+      model: GEMINI_MODEL,
+      apiKey: apiKey || undefined,
+      signal: controller.signal,
+      logPrefix: 'Qalam Photo OCR',
+      payload: {
+        systemInstruction: {
+          parts: [
+            {
+              text: 'You are a high-precision Arabic OCR transcription engine. Output ONLY the Arabic words and sentences visible in the image, preserving line breaks and Arabic punctuation. NEVER include English words, translations, commentary, explanations, apologies, or markdown.',
+            },
+          ],
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: 'Extract ONLY the Arabic text from this image. Return pure Arabic text with no English commentary or extra notes.',
+              },
+              {
+                inlineData: {
+                  mimeType: params.mimeType || 'image/jpeg',
+                  data: params.base64Data,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 429 || /RESOURCE_EXHAUSTED|quota|rate[- ]?limit/i.test(errorBody)) {
+        const quota = parseGeminiQuotaInfo(errorBody, 'text');
+        setCooldown(quota.cooldownMs, quota.userMessage);
+        throw new Error('تم بلوغ الحد المجاني المؤقت لخدمة الذكاء الاصطناعي (HTTP 429). حاول بعد قليل.');
+      }
+      if (response.status === 405) {
+        throw new Error(
+          'مسار الخادم /api/gemini/generateContent يحتاج إلى نشر على Cloudflare Worker (HTTP 405).'
+        );
+      }
+      throw new Error(
+        errorMessage || `تعذّر استخراج النص من الصورة (HTTP ${response.status}).`
+      );
+    }
+
+    const payload = (await response.json()) as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{ text?: string }>;
+        };
+      }>;
+    };
+
+    const rawText =
+      payload.candidates?.[0]?.content?.parts
+        ?.map((p) => p.text || '')
+        .join('\n')
+        .trim() || '';
+
+    const pureArabic = sanitizeExtractedArabicOnlyText(rawText);
+    if (!pureArabic) {
+      throw new Error(
+        'لم يتم العثور على نص عربي واضح في هذه الصورة · No readable Arabic text detected in the image.'
+      );
+    }
+
+    return pureArabic;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('انتهت مهلة قراءة الصورة · Photo OCR request timed out. Please try again.');
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  } finally {
+    clearTimeout(timer);
+  }
 }

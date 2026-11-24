@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
   AlertCircle,
   BookOpenText,
-  CheckCircle2,
+  Camera,
   Captions,
+  CheckCircle2,
   Loader2,
   Video,
   X,
@@ -22,6 +23,7 @@ import {
   parsePastedTranscriptSegments,
 } from '../utils/arabic';
 import {
+  extractArabicTextFromImageClient,
   fetchYouTubeOEmbedClient,
   processLessonClient,
 } from '../utils/geminiClient';
@@ -52,20 +54,28 @@ export function AddLessonModal({
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [textAr, setTextAr] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isExtractingPhoto, setIsExtractingPhoto] = useState(false);
+  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [captionStatus, setCaptionStatus] = useState<'idle' | 'loading' | 'fetched' | 'blocked'>('idle');
   const [captionNotice, setCaptionNotice] = useState<string | null>(null);
   const [detectedDuration, setDetectedDuration] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const transcriptBoxRef = useRef<HTMLTextAreaElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setError(null);
       setIsProcessing(false);
+      setIsExtractingPhoto(false);
+      setPhotoNotice(null);
       setCaptionStatus('idle');
       setCaptionNotice(null);
       setDetectedDuration(undefined);
       setLevel(defaultLevel ?? '');
+      if (cameraInputRef.current) {
+        cameraInputRef.current.value = '';
+      }
     }
   }, [isOpen, defaultLevel]);
 
@@ -80,11 +90,114 @@ export function AddLessonModal({
     setContentType('text');
     setYoutubeUrl('');
     setTextAr('');
+    setIsExtractingPhoto(false);
+    setPhotoNotice(null);
     setCaptionStatus('idle');
     setCaptionNotice(null);
     setDetectedDuration(undefined);
     setError(null);
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = '';
+    }
     onClose();
+  };
+
+  const prepareImageBase64ForOcr = async (
+    file: File
+  ): Promise<{ base64Data: string; mimeType: string }> => {
+    const readFileRaw = () =>
+      new Promise<{ base64Data: string; mimeType: string }>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = typeof reader.result === 'string' ? reader.result : '';
+          const commaIdx = result.indexOf(',');
+          if (commaIdx === -1) {
+            reject(new Error('Could not read captured image.'));
+            return;
+          }
+          resolve({
+            base64Data: result.slice(commaIdx + 1),
+            mimeType: file.type || 'image/jpeg',
+          });
+        };
+        reader.onerror = () => reject(new Error('Failed to read image file.'));
+        reader.readAsDataURL(file);
+      });
+
+    try {
+      const objectUrl = URL.createObjectURL(file);
+      try {
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error('Invalid image format.'));
+          el.src = objectUrl;
+        });
+
+        const maxDim = 1600;
+        const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+        const width = Math.max(1, Math.round((img.width || 1) * scale));
+        const height = Math.max(1, Math.round((img.height || 1) * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          return await readFileRaw();
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+        const commaIdx = dataUrl.indexOf(',');
+        if (commaIdx !== -1) {
+          return {
+            base64Data: dataUrl.slice(commaIdx + 1),
+            mimeType: 'image/jpeg',
+          };
+        }
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } catch {
+      // Fall back to direct FileReader if canvas downscaling is unavailable
+    }
+
+    return readFileRaw();
+  };
+
+  const handleCapturePhoto = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setError(null);
+    setPhotoNotice(null);
+    setIsExtractingPhoto(true);
+
+    try {
+      const { base64Data, mimeType } = await prepareImageBase64ForOcr(file);
+      const extractedArabic = await extractArabicTextFromImageClient({
+        base64Data,
+        mimeType,
+      });
+
+      setTextAr((prev) => {
+        const existing = prev.trim();
+        return existing ? `${existing}\n\n${extractedArabic}` : extractedArabic;
+      });
+      setPhotoNotice(
+        'تم استخراج النص العربي من الصورة بنجاح — يمكنك مراجعته أو تعديله ثم حفظ الدرس.'
+      );
+      window.requestAnimationFrame(() => transcriptBoxRef.current?.focus());
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'تعذّر استخراج النص العربي من الصورة · Failed to extract Arabic text from image.'
+      );
+    } finally {
+      setIsExtractingPhoto(false);
+    }
   };
 
   const handleFetchCaptions = async () => {
@@ -535,10 +648,59 @@ export function AddLessonModal({
                   ? 'Paste Video Transcript (الصق نص الفيديو الحقيقي هنا)'
                   : 'Arabic Reading Text (Smart Partial Tashkeel applied automatically) *'}
               </label>
-              <span className="font-mono text-xs tabular-nums text-[#5A6552]">
-                {wordCount} Arabic words
-              </span>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                {contentType === 'text' && (
+                  <>
+                    <input
+                      ref={cameraInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleCapturePhoto}
+                      className="hidden"
+                      aria-label="التقاط صورة لاستخراج النص العربي"
+                    />
+                    <button
+                      type="button"
+                      disabled={isProcessing || isExtractingPhoto}
+                      onClick={() => cameraInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#D4A338]/70 bg-[#FBF3DC] px-3 py-1.5 text-xs font-bold text-[#1F2718] hover:bg-[#F5E7BC] disabled:opacity-60 transition-colors cursor-pointer touch-manipulation"
+                    >
+                      {isExtractingPhoto ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#9A6F14]" aria-hidden="true" />
+                          <span className="font-arabic-cairo">جاري استخراج النص...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Camera className="h-3.5 w-3.5 text-[#9A6F14]" aria-hidden="true" />
+                          <span className="font-arabic-cairo">التقاط صورة</span>
+                          <span aria-hidden="true" className="text-[#9A6F14]/60">·</span>
+                          <span>Capture Photo</span>
+                        </>
+                      )}
+                    </button>
+                  </>
+                )}
+
+                <span className="font-mono text-xs tabular-nums text-[#5A6552]">
+                  {wordCount} Arabic words
+                </span>
+              </div>
             </div>
+
+            {photoNotice && (
+              <div
+                dir="rtl"
+                lang="ar"
+                className="mb-2 flex items-start gap-2 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9] px-3.5 py-2 text-xs font-medium text-[#2D3B22]"
+              >
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#2D3B22]" aria-hidden="true" />
+                <span>{photoNotice}</span>
+              </div>
+            )}
+
             <textarea
               ref={transcriptBoxRef}
               id="lesson-text-ar"
@@ -550,7 +712,7 @@ export function AddLessonModal({
               placeholder={
                 contentType === 'video'
                   ? 'الصق نص الفيديو الحقيقي المنسوخ من يوتيوب هنا (يدعم الطوابع الزمنية مثل 0:15 أو الفقرات العادية)، أو اضغط «Fetch Real Captions» أعلاه لمحاولة استخراجه تلقائيًا...'
-                  : 'اكتبِ النّصَّ العربيَّ هنا... سيتمُّ تنسيقُهُ تلقائيًّا بالتّشكيلِ الجزئيِّ الذّكيِّ.'
+                  : 'اكتبِ النّصَّ العربيَّ هنا أو اضغط «التقاط صورة» لتصوير نصٍّ من كتابٍ... سيتمُّ تنسيقُهُ تلقائيًّا بالتّشكيلِ الجزئيِّ الذّكيِّ.'
               }
               className={`w-full rounded-xl border bg-white px-4 py-3 font-arabic-scheherazade text-xl leading-[2.2] text-[#1F2718] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15 ${
                 captionStatus === 'blocked' && !textAr.trim()
@@ -564,14 +726,14 @@ export function AddLessonModal({
             <button
               type="button"
               onClick={onClose}
-              disabled={isProcessing}
+              disabled={isProcessing || isExtractingPhoto}
               className="rounded-xl border border-[#DCE5D3] bg-white px-4 py-2 text-sm font-medium text-[#3F4A37] hover:bg-[#EEF2E9] disabled:opacity-50 transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={isProcessing || captionStatus === 'loading'}
+              disabled={isProcessing || isExtractingPhoto || captionStatus === 'loading'}
               className="inline-flex items-center gap-2 rounded-xl bg-[#2D3B22] px-5 py-2 text-sm font-semibold text-white hover:bg-[#3E522D] disabled:opacity-70 transition-colors cursor-pointer"
             >
               {isProcessing ? (

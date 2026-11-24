@@ -19,7 +19,23 @@ import {
   TABLE_USER_PROGRESS,
   TABLE_VOCAB_CARDS,
 } from './supabaseClient';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { isPrimaryOwnerEmail, resolveAccountRole } from './auth';
+
+async function getAuthenticatedSupabaseUserId(client: SupabaseClient): Promise<string | null> {
+  try {
+    const {
+      data: { user },
+      error,
+    } = await client.auth.getUser();
+    if (error || !user?.id) {
+      return null;
+    }
+    return user.id;
+  } catch {
+    return null;
+  }
+}
 
 export interface UserProgressData {
   selectedLevel?: ProficiencyLevel;
@@ -230,11 +246,14 @@ export async function fetchVocabCardsFromCloud(userId: string): Promise<VocabCar
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo') return null;
 
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) return null;
+
   try {
     const { data, error } = await client
       .from(TABLE_VOCAB_CARDS)
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', authUserId)
       .order('created_at', { ascending: false });
 
     if (error || !Array.isArray(data)) return null;
@@ -274,9 +293,14 @@ export async function upsertVocabCardsToCloud(
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo' || cards.length === 0) return false;
 
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) {
+    return false;
+  }
+
   const rows = cards.map((c) => ({
     id: c.id,
-    user_id: userId,
+    user_id: authUserId,
     word: c.word,
     word_with_tashkeel: c.wordWithTashkeel,
     vocalized_word: c.vocalizedWord || null,
@@ -302,6 +326,9 @@ export async function upsertVocabCardsToCloud(
   try {
     const { error } = await client.from(TABLE_VOCAB_CARDS).upsert(rows, { onConflict: 'id' });
     if (error) {
+      if (error.code === '23503' || error.message?.includes('vocabulary_cards_user_id_fkey')) {
+        return false;
+      }
       console.warn('[Qalam Supabase] Error saving vocab cards to cloud:', error.message);
       return false;
     }
@@ -316,12 +343,15 @@ export async function deleteVocabCardFromCloud(userId: string, cardId: string): 
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo') return false;
 
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) return false;
+
   try {
     const { error } = await client
       .from(TABLE_VOCAB_CARDS)
       .delete()
       .eq('id', cardId)
-      .eq('user_id', userId);
+      .eq('user_id', authUserId);
 
     return !error;
   } catch {
@@ -337,11 +367,14 @@ export async function fetchStudyNotesFromCloud(userId: string): Promise<StudyNot
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo') return null;
 
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) return null;
+
   try {
     const { data, error } = await client
       .from(TABLE_STUDY_NOTES)
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', authUserId)
       .order('updated_at', { ascending: false });
 
     if (error || !Array.isArray(data)) return null;
@@ -367,9 +400,14 @@ export async function upsertStudyNotesToCloud(
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo' || notes.length === 0) return false;
 
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) {
+    return false;
+  }
+
   const rows = notes.map((n) => ({
     id: n.id,
-    user_id: userId,
+    user_id: authUserId,
     title: n.title || null,
     body: n.body,
     context: n.context || null,
@@ -380,6 +418,9 @@ export async function upsertStudyNotesToCloud(
   try {
     const { error } = await client.from(TABLE_STUDY_NOTES).upsert(rows, { onConflict: 'id' });
     if (error) {
+      if (error.code === '23503' || error.message?.includes('study_notes_user_id_fkey')) {
+        return false;
+      }
       console.warn('[Qalam Supabase] Error saving study notes to cloud:', error.message);
       return false;
     }
@@ -394,12 +435,15 @@ export async function deleteStudyNoteFromCloud(userId: string, noteId: string): 
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo') return false;
 
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) return false;
+
   try {
     const { error } = await client
       .from(TABLE_STUDY_NOTES)
       .delete()
       .eq('id', noteId)
-      .eq('user_id', userId);
+      .eq('user_id', authUserId);
 
     return !error;
   } catch {
@@ -415,11 +459,16 @@ export async function fetchUserProgressFromCloud(userId: string): Promise<UserPr
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo') return null;
 
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) {
+    return null;
+  }
+
   try {
     const { data, error } = await client
       .from(TABLE_USER_PROGRESS)
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', authUserId)
       .maybeSingle();
 
     if (error || !data) return null;
@@ -445,9 +494,16 @@ export async function upsertUserProgressToCloud(
   const client = getSupabaseClient();
   if (!client || !userId || userId === 'guest-demo') return false;
 
+  // Fetch active Supabase Auth user before syncing; skip cloud upsert if unauthenticated
+  // and strictly overwrite user_id with the real Supabase Auth UUID.
+  const authUserId = await getAuthenticatedSupabaseUserId(client);
+  if (!authUserId) {
+    return false;
+  }
+
   try {
     const row = {
-      user_id: userId,
+      user_id: authUserId,
       selected_level: progress.selectedLevel || 'beginner',
       reading_history: progress.readingHistory || [],
       study_streak: progress.studyStreak || { count: 0, lastActivityDate: null },
@@ -459,6 +515,9 @@ export async function upsertUserProgressToCloud(
 
     const { error } = await client.from(TABLE_USER_PROGRESS).upsert(row, { onConflict: 'user_id' });
     if (error) {
+      if (error.code === '23503' || error.message?.includes('user_progress_user_id_fkey')) {
+        return false;
+      }
       console.warn('[Qalam Supabase] Error saving user progress to cloud:', error.message);
       return false;
     }

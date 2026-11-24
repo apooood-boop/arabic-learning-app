@@ -109,7 +109,7 @@ function runGeminiAndKeyCheck(): {
     const apiKey = getClientGeminiApiKey();
     const apiKeyFormat: AdminHealthSnapshot['apiKeyFormat'] = !apiKey
       ? 'Missing'
-      : apiKey.startsWith('AQ.')
+      : apiKey.startsWith('ya29.')
         ? 'AQ. Auth Token (Bearer)'
         : 'Standard Key (x-goog-api-key)';
     const geminiText = getGeminiTextDiagnosticsSnapshot();
@@ -783,7 +783,7 @@ export async function pingGeminiApiStatus(
   const started = performance.now();
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 7000);
-  const authMode = apiKey.startsWith('AQ.') ? 'Authorization: Bearer (AQ.)' : 'x-goog-api-key';
+  const authMode = apiKey.startsWith('ya29.') ? 'Authorization: Bearer' : 'x-goog-api-key';
 
   try {
     const { response, errorBody } = await fetchGeminiGenerateContent({
@@ -804,6 +804,17 @@ export async function pingGeminiApiStatus(
         durationMs,
         summary: `Gemini API HTTP ${response.status} OK (${authMode})`,
         details: `Live probe succeeded for ${maskApiKey(apiKey)}`,
+      };
+    }
+
+    if (response.status === 405) {
+      return {
+        tool: 'gemini_ping',
+        ok: false,
+        durationMs,
+        summary: 'Worker route /api/gemini/generateContent returned HTTP 405',
+        details:
+          'Cloudflare Worker POST /api/gemini/generateContent needs deployment (worker.ts + wrangler.jsonc) so /api/* routes are handled before static assets.',
       };
     }
 

@@ -4,9 +4,10 @@ import {
   ArrowRight,
   BookOpen,
   Check,
-  CheckCircle2,
   ChevronDown,
   Download,
+  Eye,
+  EyeOff,
   FileJson,
   FileSpreadsheet,
   Flame,
@@ -87,12 +88,15 @@ export function VocabularyView({
   const [exportedFormat, setExportedFormat] = useState<'csv' | 'json' | null>(null);
   const [editingCard, setEditingCard] = useState<VocabCard | null>(null);
 
-  // Compact Airy Grid: track expanded example drawer & audio loading/playing per card
+  // Compact Airy Grid: track expanded example drawer, flipped translation visibility, & audio state
   const [expandedGridCardId, setExpandedGridCardId] = useState<string | null>(null);
+  const [revealedTranslationIds, setRevealedTranslationIds] = useState<Record<string, boolean>>({});
   const [gridAudioState, setGridAudioState] = useState<{
     cardId: string;
     phase: 'loading' | 'playing';
   } | null>(null);
+  const [speakingTranslationId, setSpeakingTranslationId] = useState<string | null>(null);
+  const [translationSpeechNotice, setTranslationSpeechNotice] = useState<string | null>(null);
 
   // Interactive Focus Card navigation state + slide animation direction
   const [focusIndex, setFocusIndex] = useState(0);
@@ -102,6 +106,8 @@ export function VocabularyView({
 
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const prevReqSeqRef = useRef(scopeRequestSeq);
+  const translationWatchdogRef = useRef<number | null>(null);
+  const translationNoticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (prevReqSeqRef.current !== scopeRequestSeq) {
@@ -216,8 +222,154 @@ export function VocabularyView({
     return () => window.removeEventListener('keydown', handleKey);
   }, [studyMode, viewMode, filteredCards.length, focusIndex, jumpToFocusCard]);
 
+  const showTranslationNotice = useCallback((message: string) => {
+    setTranslationSpeechNotice(message);
+    if (translationNoticeTimerRef.current !== null) {
+      window.clearTimeout(translationNoticeTimerRef.current);
+    }
+    translationNoticeTimerRef.current = window.setTimeout(() => {
+      setTranslationSpeechNotice(null);
+      translationNoticeTimerRef.current = null;
+    }, 4200);
+  }, []);
+
+  const stopTranslationSpeech = useCallback(() => {
+    if (translationWatchdogRef.current !== null) {
+      window.clearTimeout(translationWatchdogRef.current);
+      translationWatchdogRef.current = null;
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore cancel errors
+      }
+    }
+    setSpeakingTranslationId(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (translationWatchdogRef.current !== null) {
+        window.clearTimeout(translationWatchdogRef.current);
+      }
+      if (translationNoticeTimerRef.current !== null) {
+        window.clearTimeout(translationNoticeTimerRef.current);
+      }
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // Ignore
+        }
+      }
+    };
+  }, []);
+
+  const handleSpeakTranslation = useCallback(
+    (card: VocabCard) => {
+      const cleanMeaning = card.englishMeaning?.trim();
+      if (!cleanMeaning) return;
+
+      if (
+        typeof window === 'undefined' ||
+        !('speechSynthesis' in window) ||
+        typeof SpeechSynthesisUtterance === 'undefined'
+      ) {
+        showTranslationNotice(
+          'Audio playback for translations is not supported in this browser.'
+        );
+        return;
+      }
+
+      if (speakingTranslationId === card.id) {
+        stopTranslationSpeech();
+        return;
+      }
+
+      stopArabicSpeech();
+      setGridAudioState(null);
+      stopTranslationSpeech();
+
+      try {
+        const utterance = new SpeechSynthesisUtterance(cleanMeaning);
+        utterance.lang = 'en-US';
+        utterance.rate = Math.max(0.75, Math.min(1.15, speechRate));
+        utterance.volume = 1;
+
+        const voices = window.speechSynthesis.getVoices() || [];
+        const preferredEn =
+          voices.find((v) => v.lang.toLowerCase() === 'en-us' && !v.localService) ||
+          voices.find((v) => v.lang.toLowerCase().startsWith('en-us')) ||
+          voices.find((v) => v.lang.toLowerCase().startsWith('en'));
+        if (preferredEn) {
+          utterance.voice = preferredEn;
+        }
+
+        let started = false;
+        setSpeakingTranslationId(card.id);
+
+        utterance.onstart = () => {
+          started = true;
+          if (translationWatchdogRef.current !== null) {
+            window.clearTimeout(translationWatchdogRef.current);
+            translationWatchdogRef.current = null;
+          }
+        };
+
+        utterance.onend = () => {
+          if (translationWatchdogRef.current !== null) {
+            window.clearTimeout(translationWatchdogRef.current);
+            translationWatchdogRef.current = null;
+          }
+          setSpeakingTranslationId((curr) => (curr === card.id ? null : curr));
+        };
+
+        utterance.onerror = (ev) => {
+          if (translationWatchdogRef.current !== null) {
+            window.clearTimeout(translationWatchdogRef.current);
+            translationWatchdogRef.current = null;
+          }
+          setSpeakingTranslationId((curr) => (curr === card.id ? null : curr));
+          if (ev.error !== 'interrupted' && ev.error !== 'canceled') {
+            showTranslationNotice(
+              'Translation audio could not play (browser speech muted or unavailable).'
+            );
+          }
+        };
+
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
+        window.speechSynthesis.speak(utterance);
+
+        translationWatchdogRef.current = window.setTimeout(() => {
+          translationWatchdogRef.current = null;
+          if (!started) {
+            setSpeakingTranslationId((curr) => (curr === card.id ? null : curr));
+            try {
+              window.speechSynthesis.cancel();
+            } catch {
+              // Ignore
+            }
+            showTranslationNotice(
+              'Browser speech synthesis appears muted or blocked in this session.'
+            );
+          }
+        }, 1250);
+      } catch {
+        setSpeakingTranslationId(null);
+        showTranslationNotice(
+          'Translation audio playback is unavailable in this browser.'
+        );
+      }
+    },
+    [showTranslationNotice, speakingTranslationId, speechRate, stopTranslationSpeech]
+  );
+
   const handlePlayGridWord = (card: VocabCard) => {
     unlockArabicAudioContext();
+    stopTranslationSpeech();
     if (gridAudioState?.phase === 'loading') {
       return;
     }
@@ -254,6 +406,7 @@ export function VocabularyView({
 
   const handlePlayGridExample = (card: VocabCard, arabicSentence: string) => {
     unlockArabicAudioContext();
+    stopTranslationSpeech();
     if (gridAudioState?.phase === 'loading') {
       return;
     }
@@ -628,6 +781,22 @@ export function VocabularyView({
                 </div>
               </div>
 
+              {translationSpeechNotice && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-amber-200 bg-[#FBF3DC] px-4 py-2 text-xs font-medium text-[#7A560B] flex items-center justify-between gap-2"
+                >
+                  <span>{translationSpeechNotice}</span>
+                  <button
+                    type="button"
+                    onClick={() => setTranslationSpeechNotice(null)}
+                    className="font-bold text-[#7A560B] hover:underline cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
               {filteredCards.length === 0 ? (
                 <div className="rounded-2xl border border-[#DCE5D3] bg-white p-10 text-center text-sm text-[#5A6552]">
                   {filter === 'hard' && !query
@@ -721,8 +890,8 @@ export function VocabularyView({
                           </div>
                         </div>
 
-                        {/* Center concise Arabic + English */}
-                        <div className="py-4 text-center space-y-1.5">
+                        {/* Center concise Arabic + Root/POS chips + English + Translation Audio */}
+                        <div className="py-4 text-center space-y-2.5">
                           <p
                             dir="rtl"
                             lang="ar"
@@ -732,18 +901,104 @@ export function VocabularyView({
                               ? card.wordWithTashkeel
                               : applySmartPartialTashkeel(card.wordWithTashkeel)}
                           </p>
-                          <p className="font-mono text-[11px] text-[#5A6552]">
-                            {card.transliteration}
-                            {root ? ` · ${root}` : ''}
-                          </p>
-                          <p className="text-sm font-bold text-[#2D3B22] pt-1">
-                            {card.englishMeaning}
-                          </p>
+
+                          {(root || card.partOfSpeech) && (
+                            <div className="flex flex-wrap items-center justify-center gap-1.5">
+                              {root && (
+                                <span
+                                  dir="rtl"
+                                  className="inline-flex items-center gap-1 rounded-lg border border-[#E5CE8F] bg-[#FBF3DC] px-2.5 py-0.5 text-[11px] font-bold text-[#1F2718]"
+                                >
+                                  <span className="font-arabic-cairo font-extrabold text-[#7A5B10]">
+                                    الجذر:
+                                  </span>
+                                  <span className="font-mono tracking-wider font-bold">{root}</span>
+                                </span>
+                              )}
+                              {card.partOfSpeech && (
+                                <span className="rounded-lg border border-[#CDE0C4] bg-[#EEF2E9] px-2.5 py-0.5 text-[11px] font-bold text-[#2D3B22]">
+                                  {card.partOfSpeech}
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {card.transliteration && (
+                            <p className="font-mono text-[11px] text-[#5A6552]">
+                              {card.transliteration}
+                            </p>
+                          )}
+
+                          {/* Translation row with toggle + Web Speech API listen button */}
+                          {(() => {
+                            const isTranslationVisible =
+                              revealedTranslationIds[card.id] !== false;
+                            const isSpeakingEn = speakingTranslationId === card.id;
+                            return (
+                              <div className="pt-1 flex flex-col items-center gap-1.5">
+                                {isTranslationVisible ? (
+                                  <div className="animate-card-reveal inline-flex items-center justify-center gap-1.5 max-w-full rounded-xl border border-[#EEF2E9] bg-[#FAFBF8] px-3 py-1.5">
+                                    <p className="text-sm font-bold text-[#2D3B22] leading-snug">
+                                      {card.englishMeaning}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSpeakTranslation(card)}
+                                      aria-label={`Listen to English translation for ${card.wordWithTashkeel}`}
+                                      title="Listen to English translation"
+                                      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-all cursor-pointer touch-manipulation ${
+                                        isSpeakingEn
+                                          ? 'border-[#2D3B22] bg-[#2D3B22] text-[#FEF08A] ring-2 ring-[#DCE5D3]'
+                                          : 'border-[#DCE5D3] bg-white text-[#2D3B22] hover:bg-[#EEF2E9]'
+                                      }`}
+                                    >
+                                      <Volume2
+                                        className={`h-3.5 w-3.5 ${isSpeakingEn ? 'animate-pulse' : 'text-[#9A6F14]'}`}
+                                        aria-hidden="true"
+                                      />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setRevealedTranslationIds((prev) => ({
+                                        ...prev,
+                                        [card.id]: true,
+                                      }))
+                                    }
+                                    className="inline-flex items-center gap-1.5 rounded-xl border border-dashed border-[#D4A338]/70 bg-[#FBF3DC]/50 px-3 py-1.5 text-xs font-semibold text-[#7A5B10] hover:bg-[#FBF3DC] transition-colors cursor-pointer"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                                    <span>Reveal Meaning</span>
+                                  </button>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setRevealedTranslationIds((prev) => ({
+                                      ...prev,
+                                      [card.id]: !isTranslationVisible,
+                                    }))
+                                  }
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#6B7861] hover:text-[#2D3B22] cursor-pointer"
+                                >
+                                  {isTranslationVisible ? (
+                                    <>
+                                      <EyeOff className="h-3 w-3" aria-hidden="true" />
+                                      <span>Hide meaning</span>
+                                    </>
+                                  ) : null}
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Expandable concise example snippet */}
                         {isExpanded && card.examples[0] && (
-                          <div className="mb-3 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] p-3 space-y-1 animate-fade-slide-up">
+                          <div className="mb-3 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] p-3 space-y-1.5 animate-card-reveal">
                             <div className="flex items-start justify-between gap-2">
                               <button
                                 type="button"
@@ -779,7 +1034,7 @@ export function VocabularyView({
                                   : applySmartPartialTashkeel(card.examples[0].arabic)}
                               </p>
                             </div>
-                            <p className="text-xs text-[#5A6552] leading-relaxed">
+                            <p className="text-xs text-[#4A5543] leading-relaxed border-t border-[#EEF2E9] pt-1.5">
                               {card.examples[0].english}
                             </p>
                           </div>
@@ -914,6 +1169,8 @@ export function VocabularyView({
                         onToggleDifficult={onToggleDifficult}
                         onEdit={onEditCard ? (c) => setEditingCard(c) : undefined}
                         onDelete={onDeleteCard}
+                        onSpeakTranslation={handleSpeakTranslation}
+                        isSpeakingTranslation={speakingTranslationId === activeFocusCard.id}
                       />
                     </div>
                   )}

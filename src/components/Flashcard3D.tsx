@@ -24,6 +24,8 @@ interface Flashcard3DProps {
   onToggleDifficult?: (id: string) => void;
   onEdit?: (card: VocabCard) => void;
   onDelete?: (id: string) => void;
+  onSpeakTranslation?: (card: VocabCard) => void;
+  isSpeakingTranslation?: boolean;
 }
 
 const SRS_META: Record<SrsRating, { label: string; colorClass: string }> = {
@@ -42,6 +44,8 @@ export function Flashcard3D({
   onToggleDifficult,
   onEdit,
   onDelete,
+  onSpeakTranslation,
+  isSpeakingTranslation = false,
 }: Flashcard3DProps) {
   const [internalFlipped, setInternalFlipped] = useState(false);
   const [speakingKey, setSpeakingKey] = useState<'word' | number | null>(null);
@@ -219,12 +223,12 @@ export function Flashcard3D({
           }
         }}
         aria-label={`Flashcard for ${card.wordWithTashkeel}. Tap, swipe, or press Enter to flip.`}
-        className={`touch-card-surface relative h-full w-full ${heightClass} transform-style-3d flashcard-transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4A338] rounded-2xl ${
+        className={`touch-card-surface relative h-full w-full ${heightClass} card-flip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4A338] rounded-2xl ${
           isFlipped ? 'rotate-y-180' : ''
         }`}
       >
         {/* FRONT SIDE: Arabic Word with Smart Partial Tashkeel + Context Sentences + Listen */}
-        <div className="backface-hidden absolute inset-0 flex flex-col justify-between rounded-2xl border border-[#DCE5D3] bg-white/95 backdrop-blur-md p-5 sm:p-6 shadow-sm group-hover:shadow-md transition-shadow overflow-y-auto overscroll-contain">
+        <div className="backface-hidden absolute inset-0 flex flex-col justify-between rounded-2xl border border-[#D4DFC8] bg-white p-5 sm:p-6 shadow-sm group-hover:shadow-md transition-shadow overflow-y-auto overscroll-contain">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#DCE5D3]/80 pb-3 select-none">
             <div className="flex items-center gap-2.5 text-xs font-semibold">
               {card.status === 'learned' ? (
@@ -306,17 +310,17 @@ export function Flashcard3D({
                 : applySmartPartialTashkeel(card.wordWithTashkeel)}
             </p>
             {(wordType || root) && (
-              <div className="mt-2 flex flex-wrap items-center justify-center gap-2 font-arabic-cairo">
+              <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2.5 font-arabic-cairo">
                 {wordType && (
-                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-[#CDE0C4] bg-[#EEF2E9] px-3 py-1 text-xs font-bold text-[#2D3B22] shadow-2xs">
-                    <span className="text-[#5A6552] font-normal">نوع الكلمة:</span>
-                    <span className="font-bold">{wordType}</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-[#BBD0AA] bg-[#EEF2E9] px-3.5 py-1 text-xs font-bold tracking-wide text-[#24301B] shadow-2xs">
+                    <span className="text-[#4A5A3E] font-bold">نوع الكلمة:</span>
+                    <span className="font-extrabold">{wordType}</span>
                   </span>
                 )}
                 {root && (
-                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-[#F3E2B4] bg-[#FBF3DC] px-3 py-1 text-xs font-bold text-[#1F2718] shadow-2xs">
-                    <span className="text-[#7A5B10] font-bold">الجذر:</span>
-                    <span className="font-mono tracking-wider font-extrabold">{root}</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-xl border border-[#E5CE8F] bg-[#FBF3DC] px-3.5 py-1 text-xs font-bold tracking-wide text-[#1F2718] shadow-2xs">
+                    <span className="text-[#7A5B10] font-extrabold">الجذر:</span>
+                    <span className="font-mono tracking-widest font-extrabold text-[#24301B]">{root}</span>
                   </span>
                 )}
               </div>
@@ -385,21 +389,22 @@ export function Flashcard3D({
         {/* BACK SIDE: English meaning + Example sentences with English translation underneath + SRS Controls */}
         <div
           dir="ltr"
-          className="backface-hidden rotate-y-180 absolute inset-0 flex flex-col justify-between rounded-2xl border border-[#D4A338]/45 bg-gradient-to-br from-white via-[#FAFBF8] to-[#EEF2E9]/70 p-5 sm:p-6 shadow-sm overflow-y-auto overscroll-contain"
+          className="backface-hidden rotate-y-180 absolute inset-0 flex flex-col justify-between rounded-2xl border border-[#D4A338]/55 bg-gradient-to-br from-white via-[#FAFBF8] to-[#EEF2E9] p-5 sm:p-6 shadow-sm overflow-y-auto overscroll-contain"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#DCE5D3]/80 pb-3 select-none">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-[#5A6552]">
-              <span className="font-semibold text-[#1F2718]">{card.partOfSpeech}</span>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#DCE5D3] pb-3 select-none">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[#4A5543]">
+              <span className="rounded-lg border border-[#CDE0C4] bg-[#EEF2E9] px-2.5 py-0.5 font-bold text-[#24301B]">
+                {card.partOfSpeech}
+              </span>
               {card.transliteration && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="font-mono text-[#5A6552] select-text">{card.transliteration}</span>
-                </>
+                <span className="font-mono font-medium text-[#5A6552] select-text">
+                  {card.transliteration}
+                </span>
               )}
               {card.level && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span className="font-medium text-[#9A6F14]">
+                  <span className="font-semibold text-[#9A6F14]">
                     {LEVEL_LABELS[card.level].en}
                   </span>
                 </>
@@ -411,10 +416,35 @@ export function Flashcard3D({
             </span>
           </div>
 
-          <div className="py-2 space-y-1">
-            <p className="text-xs font-semibold text-[#5A6552]">English Meaning</p>
+          <div className="py-3 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-[#5A6552]">
+                English Meaning
+              </p>
+              {onSpeakTranslation && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSpeakTranslation(card);
+                  }}
+                  aria-label={`Listen to English translation for ${card.wordWithTashkeel}`}
+                  className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer touch-manipulation ${
+                    isSpeakingTranslation
+                      ? 'border-[#2D3B22] bg-[#2D3B22] text-[#FEF08A] ring-2 ring-[#DCE5D3]'
+                      : 'border-[#DCE5D3] bg-white text-[#2D3B22] hover:bg-[#EEF2E9]'
+                  }`}
+                >
+                  <Volume2
+                    className={`h-3.5 w-3.5 ${isSpeakingTranslation ? 'animate-pulse' : 'text-[#9A6F14]'}`}
+                    aria-hidden="true"
+                  />
+                  <span>{isSpeakingTranslation ? 'Playing' : 'Listen EN'}</span>
+                </button>
+              )}
+            </div>
             <h3
-              className={`font-display font-bold text-[#1F2718] ${
+              className={`font-display font-bold text-[#1F2718] leading-snug ${
                 large ? 'text-2xl' : 'text-xl'
               }`}
             >
@@ -423,15 +453,17 @@ export function Flashcard3D({
           </div>
 
           {card.examples.length > 0 && (
-            <div className="space-y-2.5 border-t border-[#DCE5D3]/80 pt-3">
-              <p className="text-xs font-semibold text-[#5A6552]">Example Sentences</p>
+            <div className="space-y-2.5 border-t border-[#DCE5D3] pt-3">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-[#5A6552]">
+                Examples in Context
+              </p>
               {card.examples.slice(0, 2).map((ex, idx) => (
                 <div
                   key={idx}
-                  className="rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-sm leading-relaxed text-[#1F2718] space-y-1 shadow-2xs"
+                  className="rounded-xl border border-[#DCE5D3] bg-white px-4 py-3 text-sm leading-relaxed text-[#1F2718] space-y-1.5 shadow-2xs"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs font-bold text-[#9A6F14]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="rounded-md bg-[#FBF3DC] px-2 py-0.5 font-mono text-[11px] font-bold text-[#7A5B10]">
                       Example {idx + 1}
                     </span>
                     {ex.contextLabel && (
@@ -440,10 +472,14 @@ export function Flashcard3D({
                       </span>
                     )}
                   </div>
-                  <p className="font-arabic-scheherazade text-lg sm:text-[19px] leading-[2.0] text-[#1F2718] text-right" dir="rtl" lang="ar">
+                  <p
+                    className="font-arabic-scheherazade text-xl sm:text-[21px] leading-[2.0] text-[#1F2718] text-right pt-0.5"
+                    dir="rtl"
+                    lang="ar"
+                  >
                     {card.hasCustomEdits ? ex.arabic : applySmartPartialTashkeel(ex.arabic)}
                   </p>
-                  <p className="text-xs text-[#5A6552] font-normal leading-normal" dir="ltr">
+                  <p className="text-xs sm:text-[13px] text-[#4A5543] font-medium leading-relaxed border-t border-[#EEF2E9] pt-1.5" dir="ltr">
                     {ex.english}
                   </p>
                 </div>

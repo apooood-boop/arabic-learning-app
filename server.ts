@@ -35,7 +35,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '6mb' }));
 
 // In-memory LRU-style server cache for instant repeat lookups
 const serverWordCache = new Map<string, WordAnalysis>();
@@ -58,7 +58,7 @@ function createServerGeminiClient(apiKey: string): GoogleGenAI {
   const headers: Record<string, string> = {
     'User-Agent': 'aistudio-build',
   };
-  if (cleanKey.startsWith('AQ.')) {
+  if (cleanKey.startsWith('ya29.')) {
     headers.Authorization = `Bearer ${cleanKey}`;
   }
   return new GoogleGenAI({
@@ -2098,30 +2098,42 @@ Requirements:
 
 // Secure Server-Side Gemini Proxy Route for all client AI calls
 app.post('/api/gemini/generateContent', async (req, res) => {
-  const { model, payload, apiKey: clientApiKey } = req.body as {
-    model?: string;
-    payload?: unknown;
-    apiKey?: string;
-  };
-  const apiKey = (clientApiKey && typeof clientApiKey === 'string' && clientApiKey.trim())
-    ? clientApiKey.trim()
-    : getConfiguredApiKey();
+  const rawBody = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
+    string,
+    unknown
+  >;
+  const model = typeof rawBody.model === 'string' ? rawBody.model : undefined;
+  const clientApiKey = typeof rawBody.apiKey === 'string' ? rawBody.apiKey : undefined;
+  const payload =
+    rawBody.payload !== undefined
+      ? rawBody.payload
+      : (() => {
+          const copy = { ...rawBody };
+          delete copy.model;
+          delete copy.apiKey;
+          return copy;
+        })();
+
+  const apiKey =
+    clientApiKey && clientApiKey.trim() && clientApiKey.trim() !== 'MY_GEMINI_API_KEY'
+      ? clientApiKey.trim()
+      : getConfiguredApiKey();
 
   if (!apiKey) {
     return res.status(500).json({ error: { message: 'Server Gemini API key not configured.' } });
   }
 
-  const modelName = model || 'gemini-2.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+  const modelName = (model || 'gemini-2.5-flash').replace(/^models\//, '');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
 
   try {
-    const isAuthToken = apiKey.startsWith('AQ.');
+    const isOAuthToken = apiKey.startsWith('ya29.');
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'User-Agent': 'aistudio-build',
     };
 
-    if (isAuthToken) {
+    if (isOAuthToken) {
       headers['Authorization'] = `Bearer ${apiKey}`;
     } else {
       headers['x-goog-api-key'] = apiKey;
@@ -2133,13 +2145,13 @@ app.post('/api/gemini/generateContent', async (req, res) => {
       body: JSON.stringify(payload || {}),
     });
 
-    const errorBody = await upstream.text().catch(() => '');
+    const responseText = await upstream.text().catch(() => '');
     if (!upstream.ok) {
-      return res.status(upstream.status).send(errorBody);
+      return res.status(upstream.status).send(responseText);
     }
 
     res.setHeader('Content-Type', 'application/json');
-    return res.send(errorBody);
+    return res.send(responseText);
   } catch (err) {
     console.error('[Gemini Proxy Server] Error proxying generateContent:', err);
     const errMsg = err instanceof Error ? err.message : String(err);

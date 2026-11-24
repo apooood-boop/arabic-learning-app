@@ -19,6 +19,7 @@ export function setAdminGeminiApiKeyOverride(key: string | null): void {
     } else {
       window.localStorage.setItem(ADMIN_KEY_OVERRIDE_STORAGE_KEY, key.trim());
     }
+    window.dispatchEvent(new CustomEvent('qalam:gemini-key-changed'));
   } catch {
     // Ignore storage errors
   }
@@ -103,6 +104,7 @@ export async function fetchGeminiGenerateContent(params: {
   payload: unknown;
   signal?: AbortSignal;
   logPrefix?: string;
+  _retriedFallbackModel?: boolean;
 }): Promise<GeminiRestResult> {
   const logPrefix = params.logPrefix || 'Gemini API';
   const cleanModel = (params.model || 'gemini-2.5-flash').replace(/^models\//, '');
@@ -129,7 +131,107 @@ export async function fetchGeminiGenerateContent(params: {
       return { response: res, errorBody: '', url: targetGoogleUrl };
     }
 
+    // If Cloudflare Worker static host returned 405 (Worker route not yet deployed),
+    // cleanly fall back to direct Google endpoint when a client API key is available.
+    if (res.status === 405) {
+      console.warn(
+        `[${logPrefix}] Worker route POST /api/gemini/generateContent returned HTTP 405 (route needs deployment).`
+      );
+      if (cleanKey) {
+        try {
+          const directHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+          };
+          if (cleanKey.startsWith('ya29.')) {
+            directHeaders['Authorization'] = `Bearer ${cleanKey}`;
+          } else {
+            directHeaders['x-goog-api-key'] = cleanKey;
+          }
+          const directRes = await fetch(targetGoogleUrl, {
+            method: 'POST',
+            signal: params.signal,
+            headers: directHeaders,
+            body: JSON.stringify(params.payload || {}),
+          });
+          if (directRes.ok) {
+            return { response: directRes, errorBody: '', url: targetGoogleUrl };
+          }
+          const directErr = await directRes.text().catch(() => '');
+          if (
+            directRes.status === 404 &&
+            cleanModel === 'gemini-2.5-flash' &&
+            !params._retriedFallbackModel
+          ) {
+            return fetchGeminiGenerateContent({
+              ...params,
+              model: 'gemini-3.8-flash',
+              _retriedFallbackModel: true,
+            });
+          }
+          let directMsg = '';
+          try {
+            const parsedDirect = JSON.parse(directErr) as { error?: { message?: string } };
+            directMsg = parsedDirect?.error?.message || '';
+          } catch {
+            // ignore
+          }
+          return {
+            response: directRes,
+            errorBody: directErr,
+            errorMessage: directMsg || directErr,
+            url: targetGoogleUrl,
+          };
+        } catch (directNetworkErr) {
+          const fallbackMsg =
+            directNetworkErr instanceof Error
+              ? directNetworkErr.message
+              : String(directNetworkErr);
+          const deployHint = `Worker /api/gemini/generateContent returned 405 and direct fallback failed: ${fallbackMsg}`;
+          return {
+            response: new Response(JSON.stringify({ error: { message: deployHint } }), {
+              status: 405,
+              statusText: 'Method Not Allowed',
+            }),
+            errorBody: deployHint,
+            errorMessage: deployHint,
+            url: targetGoogleUrl,
+          };
+        }
+      }
+
+      const missingRouteBody = JSON.stringify({
+        error: {
+          message:
+            'Cloudflare Worker route POST /api/gemini/generateContent returned HTTP 405 and needs deployment.',
+        },
+      });
+      return {
+        response: new Response(missingRouteBody, {
+          status: 405,
+          statusText: 'Method Not Allowed',
+          headers: { 'Content-Type': 'application/json' },
+        }),
+        errorBody: missingRouteBody,
+        errorMessage:
+          'Cloudflare Worker route POST /api/gemini/generateContent returned HTTP 405 and needs deployment.',
+        url: targetGoogleUrl,
+      };
+    }
+
     const errorBody = await res.text().catch(() => '');
+    if (
+      res.status === 404 &&
+      cleanModel === 'gemini-2.5-flash' &&
+      !params._retriedFallbackModel &&
+      /no longer available|not found|not supported/i.test(errorBody)
+    ) {
+      return fetchGeminiGenerateContent({
+        ...params,
+        model: 'gemini-3.8-flash',
+        _retriedFallbackModel: true,
+      });
+    }
+
     let errorMessage = '';
     try {
       const parsed = JSON.parse(errorBody) as { error?: { message?: string } };

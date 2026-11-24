@@ -1313,6 +1313,27 @@ export function getAudioDiagnosticsSnapshot(): AudioDiagnosticsSnapshot {
   };
 }
 
+export function clearArabicAudioCooldowns(): void {
+  clientGeminiTtsCooldownUntil = 0;
+  clientGeminiRejectedReason = null;
+  staticApiTtsUnavailable = false;
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage?.removeItem(CLIENT_GEMINI_COOLDOWN_KEY);
+      window.sessionStorage?.removeItem(CLIENT_GEMINI_REJECTED_KEY);
+      window.sessionStorage?.removeItem(STATIC_API_TTS_UNAVAILABLE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('qalam:gemini-key-changed', () => {
+    clearArabicAudioCooldowns();
+  });
+}
+
 export function clearAllArabicAudioCaches(): { clearedMemory: number; clearedPersistent: number } {
   stopArabicSpeech();
   const clearedMemory = clientTtsAudioCache.size;
@@ -1344,18 +1365,9 @@ export function clearAllArabicAudioCaches(): { clearedMemory: number; clearedPer
         // Ignore storage errors
       }
     }
-    try {
-      window.sessionStorage?.removeItem(CLIENT_GEMINI_COOLDOWN_KEY);
-      window.sessionStorage?.removeItem(CLIENT_GEMINI_REJECTED_KEY);
-      window.sessionStorage?.removeItem(STATIC_API_TTS_UNAVAILABLE_KEY);
-    } catch {
-      // Ignore storage errors
-    }
   }
 
-  clientGeminiTtsCooldownUntil = 0;
-  clientGeminiRejectedReason = null;
-  staticApiTtsUnavailable = false;
+  clearArabicAudioCooldowns();
 
   return { clearedMemory, clearedPersistent };
 }
