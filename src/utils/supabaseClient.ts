@@ -15,6 +15,7 @@ export const TABLE_PROFILES = 'profiles';
 export const TABLE_VOCAB_CARDS = 'vocabulary_cards';
 export const TABLE_STUDY_NOTES = 'study_notes';
 export const TABLE_USER_PROGRESS = 'user_progress';
+export const TABLE_LESSONS = 'lessons';
 
 export interface SupabaseConfigStatus {
   isConfigured: boolean;
@@ -92,6 +93,21 @@ export function getSupabaseConfigStatus(): SupabaseConfigStatus {
   }
 }
 
+function readActiveUserIdHeader(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem('qalam_active_user_v1');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { id?: string; isGuest?: boolean };
+    if (parsed && !parsed.isGuest && typeof parsed.id === 'string' && parsed.id.trim()) {
+      return parsed.id.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Safely retrieves or initializes the Supabase client.
  * Returns null if credentials are not configured or invalid, never throwing.
@@ -113,6 +129,19 @@ export function getSupabaseClient(): SupabaseClient | null {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: false,
+      },
+      global: {
+        fetch: (input, init) => {
+          const activeId = readActiveUserIdHeader();
+          if (!activeId) {
+            return fetch(input, init);
+          }
+          const headers = new Headers(init?.headers);
+          if (!headers.has('x-user-id')) {
+            headers.set('x-user-id', activeId);
+          }
+          return fetch(input, { ...init, headers });
+        },
       },
     });
     return supabaseInstance;

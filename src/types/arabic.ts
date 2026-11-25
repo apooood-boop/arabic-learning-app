@@ -75,6 +75,8 @@ export interface TranscriptSegment {
   textAr: string;
 }
 
+export type LessonStatus = 'published' | 'draft';
+
 export interface Lesson {
   id: string;
   titleEn: string;
@@ -90,6 +92,12 @@ export interface Lesson {
   isCustom?: boolean;
   authorName?: string;
   authorId?: string;
+  authorRole?: UserRole;
+  isPublic?: boolean;
+  status?: LessonStatus;
+  isDailyCurriculum?: boolean;
+  curriculumDate?: string;
+  topicKey?: string;
   createdAt?: number;
 }
 

@@ -250,9 +250,16 @@ export function AddLessonModal({
     const titleEn = !titleHasArabic ? params.cleanTitle : params.cleanSubtitle || params.cleanTitle;
 
     const finalWordCount = countArabicWords(params.formattedTextAr);
+    const authorRole = currentUser?.role ?? 'student';
+    const isPrivilegedAuthor = authorRole === 'admin' || authorRole === 'moderator';
+
+    const newLessonId =
+      typeof window !== 'undefined' && typeof window.crypto?.randomUUID === 'function'
+        ? window.crypto.randomUUID()
+        : `custom-${Date.now()}`;
 
     const newLesson: Lesson = {
-      id: `custom-${Date.now()}`,
+      id: newLessonId,
       titleEn,
       titleAr,
       level: params.targetLevel,
@@ -268,6 +275,9 @@ export function AddLessonModal({
       isCustom: true,
       authorName: currentUser?.name ?? 'Guest Author',
       authorId: currentUser?.id,
+      authorRole,
+      isPublic: isPrivilegedAuthor,
+      status: 'published',
       createdAt: Date.now(),
     };
 
@@ -447,12 +457,27 @@ export function AddLessonModal({
 
         <form onSubmit={(e) => handleSubmit(e, false)} className="p-6 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9]/70 px-3.5 py-2.5 text-xs text-[#5A6552]">
-            <span>
-              Publishing as{' '}
-              <span className="font-semibold text-[#1F2718]">
-                {currentUser ? currentUser.name : 'Guest Author'}
+            <div className="flex flex-wrap items-center gap-2">
+              <span>
+                Publishing as{' '}
+                <span className="font-semibold text-[#1F2718]">
+                  {currentUser ? currentUser.name : 'Guest Author'}
+                </span>
               </span>
-            </span>
+              {currentUser && !currentUser.isGuest && (
+                <span
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                    currentUser.role === 'admin' || currentUser.role === 'moderator'
+                      ? 'bg-[#2D3B22] text-[#FACC15]'
+                      : 'bg-white border border-[#DCE5D3] text-[#3B4D2B]'
+                  }`}
+                >
+                  {currentUser.role === 'admin' || currentUser.role === 'moderator'
+                    ? 'Public · درس عام للجميع'
+                    : 'Private · خاص بحسابك فقط'}
+                </span>
+              )}
+            </div>
             {!currentUser && (
               <button
                 type="button"

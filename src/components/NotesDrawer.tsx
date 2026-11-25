@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  AlertCircle,
   BookOpen,
   Check,
   Layers,
+  Loader2,
   NotebookPen,
   Pencil,
   Plus,
@@ -12,6 +14,13 @@ import {
   X,
 } from 'lucide-react';
 import type { NoteContextTag, StudyNote } from '../types/arabic';
+
+export interface SaveNoteResult {
+  ok: boolean;
+  syncedToCloud?: boolean;
+  message?: string;
+  error?: string;
+}
 
 interface NotesDrawerProps {
   isOpen: boolean;
@@ -23,8 +32,8 @@ interface NotesDrawerProps {
     title?: string;
     body: string;
     context?: NoteContextTag;
-  }) => void;
-  onDeleteNote: (id: string) => void;
+  }) => Promise<SaveNoteResult> | SaveNoteResult;
+  onDeleteNote: (id: string) => Promise<SaveNoteResult | void> | void;
 }
 
 function formatNoteDate(timestamp: number): string {
@@ -58,7 +67,18 @@ export function NotesDrawer({
   const [filterScope, setFilterScope] = useState<'all' | 'context'>('all');
   const [error, setError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [justSaved, setJustSaved] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const savedTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (savedTimerRef.current !== null) {
+        window.clearTimeout(savedTimerRef.current);
+      }
+    };
+  }, []);
 
   // Sync default context when opening the drawer for a new note
   useEffect(() => {
@@ -70,6 +90,7 @@ export function NotesDrawer({
       }
     } else {
       setFilterScope('all');
+      setSuccessMessage(null);
     }
   }, [isOpen, activeContext, editingId]);
 
@@ -136,24 +157,63 @@ export function NotesDrawer({
     setConfirmDeleteId(null);
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+
     const cleanBody = body.trim();
+    const cleanTitle = title.trim();
     if (!cleanBody) {
+      setSuccessMessage(null);
       setError('Please write your note before saving · يرجى كتابة الملاحظة قبل الحفظ.');
       return;
     }
 
-    onSaveNote({
-      id: editingId ?? undefined,
-      title: title.trim() || undefined,
-      body: cleanBody,
-      context: attachedContext,
-    });
+    setError(null);
+    setSuccessMessage(null);
+    setIsSaving(true);
 
-    resetComposer();
-    setJustSaved(true);
-    window.setTimeout(() => setJustSaved(false), 1800);
+    try {
+      const result = await onSaveNote({
+        id: editingId ?? undefined,
+        title: cleanTitle || undefined,
+        body: cleanBody,
+        context: attachedContext,
+      });
+
+      if (!result.ok) {
+        setError(
+          result.error ||
+            'Failed to save note. Please try again · تعذر حفظ الملاحظة، يرجى المحاولة مرة أخرى.'
+        );
+        return;
+      }
+
+      resetComposer();
+      const message =
+        result.message ||
+        (result.syncedToCloud
+          ? 'Saved to cloud · تم الحفظ في السحابة'
+          : 'Saved · تم الحفظ');
+      setSuccessMessage(message);
+
+      if (savedTimerRef.current !== null) {
+        window.clearTimeout(savedTimerRef.current);
+      }
+      savedTimerRef.current = window.setTimeout(() => {
+        setSuccessMessage(null);
+        savedTimerRef.current = null;
+      }, 3500);
+    } catch (err) {
+      console.error('[Qalam NotesDrawer] Failed to save note:', err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Unexpected error while saving note · حدث خطأ غير متوقع أثناء الحفظ.'
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -221,17 +281,26 @@ export function NotesDrawer({
               <span className="text-xs font-bold text-[#1F2718]">
                 {editingId ? 'Edit Note · تعديل الملاحظة' : 'New Study Note · ملاحظة جديدة'}
               </span>
-              {justSaved && (
-                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#2D3B22]">
-                  <Check className="h-3.5 w-3.5 text-[#D4A338]" aria-hidden="true" />
-                  <span>Saved · تم الحفظ</span>
-                </span>
-              )}
             </div>
 
+            {successMessage && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-2 rounded-xl border border-[#C6D9B7] bg-[#EEF5E8] px-3 py-2 text-xs font-semibold text-[#244316]"
+              >
+                <Check className="h-4 w-4 shrink-0 text-[#3E7A25]" aria-hidden="true" />
+                <span>{successMessage}</span>
+              </div>
+            )}
+
             {error && (
-              <div className="rounded-xl border border-orange-200 bg-[#FEF2E8] px-3 py-2 text-xs font-medium text-[#9A3412]">
-                {error}
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-xl border border-orange-300 bg-[#FEF2E8] px-3 py-2 text-xs font-medium text-[#9A3412]"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#C2410C]" aria-hidden="true" />
+                <span>{error}</span>
               </div>
             )}
 
@@ -323,9 +392,15 @@ export function NotesDrawer({
               )}
               <button
                 type="submit"
-                className="inline-flex min-h-[44px] sm:min-h-0 items-center gap-1.5 rounded-xl bg-[#2D3B22] px-4 py-2 text-xs font-semibold text-white hover:bg-[#3E522D] shadow-2xs transition-colors cursor-pointer touch-manipulation"
+                disabled={isSaving}
+                className="inline-flex min-h-[44px] sm:min-h-0 items-center gap-1.5 rounded-xl bg-[#2D3B22] px-4 py-2 text-xs font-semibold text-white hover:bg-[#3E522D] disabled:opacity-60 disabled:cursor-not-allowed shadow-2xs transition-colors cursor-pointer touch-manipulation"
               >
-                {editingId ? (
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-[#E8B948]" aria-hidden="true" />
+                    <span>Saving... · جارٍ الحفظ...</span>
+                  </>
+                ) : editingId ? (
                   <>
                     <Check className="h-3.5 w-3.5 text-[#E8B948]" aria-hidden="true" />
                     <span>Update Note · تحديث</span>
@@ -455,14 +530,33 @@ export function NotesDrawer({
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() => {
-                                onDeleteNote(note.id);
-                                if (editingId === note.id) resetComposer();
-                                setConfirmDeleteId(null);
+                              disabled={deletingId === note.id}
+                              onClick={async () => {
+                                setDeletingId(note.id);
+                                setError(null);
+                                try {
+                                  const result = await onDeleteNote(note.id);
+                                  if (result && !result.ok) {
+                                    setError(
+                                      result.error ||
+                                        'Failed to delete note from cloud · تعذر حذف الملاحظة.'
+                                    );
+                                  } else {
+                                    if (editingId === note.id) resetComposer();
+                                  }
+                                } catch (err) {
+                                  console.error('[Qalam NotesDrawer] Failed to delete note:', err);
+                                  setError(
+                                    err instanceof Error ? err.message : 'Failed to delete note.'
+                                  );
+                                } finally {
+                                  setDeletingId(null);
+                                  setConfirmDeleteId(null);
+                                }
                               }}
-                              className="min-h-[36px] sm:min-h-0 rounded-lg bg-[#C2410C] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#9A3412] cursor-pointer touch-manipulation"
+                              className="min-h-[36px] sm:min-h-0 rounded-lg bg-[#C2410C] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#9A3412] disabled:opacity-60 cursor-pointer touch-manipulation"
                             >
-                              Delete
+                              {deletingId === note.id ? 'Deleting...' : 'Delete'}
                             </button>
                             <button
                               type="button"

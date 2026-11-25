@@ -27,6 +27,14 @@ import {
   pingSupabaseConnection,
   type SupabaseConfigStatus,
 } from './supabaseClient';
+import {
+  isCardMissingOrPlaceholderTranslation,
+  repairMissingCardTranslations,
+  type TranslationRepairProgress,
+  type TranslationRepairSummary,
+} from './vocabTranslationRepair';
+
+export type { TranslationRepairProgress, TranslationRepairSummary };
 
 function assertAdminActor(actorUser: AuthUser | null): void {
   if (!isAdminUser(actorUser)) {
@@ -370,7 +378,7 @@ function runCardsAndCacheScan(
       if (card.hasCustomEdits) {
         vocabCardsCustomEdited += 1;
       }
-      if (card.englishMeaning?.trim().startsWith('Contextual Arabic word')) {
+      if (isCardMissingOrPlaceholderTranslation(card)) {
         vocabCardsWithPlaceholders += 1;
       }
       if (!card.hasCustomEdits && card.wordWithTashkeel) {
@@ -605,6 +613,8 @@ export interface AutoRepairReport {
   clearedGeminiCacheEntries: number;
   clearedAudioCacheEntries: number;
   repairedOtherAccountCards: number;
+  nextVocabCards?: VocabCard[];
+  nextAnalysisCache?: Record<string, WordAnalysis>;
 }
 
 export function runAutoDataAndCacheRepair(params: {
@@ -639,15 +649,17 @@ export function runAutoDataAndCacheRepair(params: {
       let updated = card;
       let cardChanged = false;
 
-      if (card.englishMeaning?.trim().startsWith('Contextual Arabic word')) {
+      if (isCardMissingOrPlaceholderTranslation(card)) {
         cleanedVocabPlaceholders += 1;
-        cardChanged = true;
-        updated = {
-          ...updated,
-          englishMeaning: 'Translation pending — tap Translate or Edit to retry',
-          transliteration:
-            card.transliteration === card.word ? '' : card.transliteration,
-        };
+        if (!card.englishMeaning?.trim().startsWith('Translation pending')) {
+          cardChanged = true;
+          updated = {
+            ...updated,
+            englishMeaning: 'Translation pending — tap Translate or Edit to retry',
+            transliteration:
+              card.transliteration === card.word ? '' : card.transliteration,
+          };
+        }
       }
 
       if (card.hasCustomEdits) {
@@ -740,7 +752,28 @@ export function runAutoDataAndCacheRepair(params: {
     clearedGeminiCacheEntries: geminiCleared.clearedMemory + geminiCleared.clearedPersistent,
     clearedAudioCacheEntries: audioCleared.clearedMemory + audioCleared.clearedPersistent,
     repairedOtherAccountCards,
+    nextVocabCards: activeRepair.next,
+    nextAnalysisCache: cleanedWordCache,
   };
+}
+
+export async function runAdminVocabTranslationRepair(params: {
+  actorUser: AuthUser | null;
+  activeVocabCards: VocabCard[];
+  analysisCache: Record<string, WordAnalysis>;
+  onVocabRepaired: (nextCards: VocabCard[]) => void;
+  onAnalysisCacheRepaired: (nextCache: Record<string, WordAnalysis>) => void;
+  onProgress?: (progress: TranslationRepairProgress) => void;
+}): Promise<{ nextCards: VocabCard[]; summary: TranslationRepairSummary }> {
+  assertAdminActor(params.actorUser);
+  return repairMissingCardTranslations({
+    activeUser: params.actorUser,
+    cards: params.activeVocabCards,
+    analysisCache: params.analysisCache,
+    onCardsRepaired: params.onVocabRepaired,
+    onAnalysisCacheRepaired: params.onAnalysisCacheRepaired,
+    onProgress: params.onProgress,
+  });
 }
 
 export interface LiveToolTestResult {
@@ -992,9 +1025,10 @@ export function testVocabEditAndCacheTool(
 export function formatDiagnosticReportText(params: {
   health: AdminHealthSnapshot;
   repair?: AutoRepairReport | null;
+  translationRepair?: TranslationRepairSummary | null;
   testResults?: LiveToolTestResult[];
 }): string {
-  const { health, repair, testResults = [] } = params;
+  const { health, repair, translationRepair, testResults = [] } = params;
   const checkErrorEntries = Object.entries(health.checkErrors || {}).filter(([, msg]) => Boolean(msg));
   const lines = [
     '=== Qalam Admin Diagnostics Report ===',
@@ -1039,6 +1073,20 @@ export function formatDiagnosticReportText(params: {
       `Cleaned Vocab Placeholders: ${repair.cleanedVocabPlaceholders} (Other stores: ${repair.repairedOtherAccountCards})`,
       `Normalized Standalone Cards: ${repair.normalizedVocabCards} (Preserved custom edits: ${repair.preservedCustomEditedCards})`,
       `Cleared Stale Caches (Gemini/Audio): ${repair.clearedGeminiCacheEntries} / ${repair.clearedAudioCacheEntries}`
+    );
+  }
+
+  if (translationRepair) {
+    lines.push(
+      '--- Last Missing Translation Repair Run ---',
+      `Scanned: ${translationRepair.scannedCount} | Affected: ${translationRepair.affectedCount} | Fixed: ${translationRepair.fixedCount} | Needs Retry: ${translationRepair.retryCount}`,
+      `Supabase vocabulary_cards Sync: ${
+        translationRepair.supabaseAttempted
+          ? translationRepair.supabaseSynced
+            ? `Synced (${translationRepair.supabaseSyncedCount} cards)`
+            : `Failed (${translationRepair.supabaseError || 'Unknown error'})`
+          : 'Not attempted'
+      }`
     );
   }
 

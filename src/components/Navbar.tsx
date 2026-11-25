@@ -16,15 +16,30 @@ import {
   Target,
   WifiOff,
 } from 'lucide-react';
-import { ActiveTab, AuthUser, VocabCard } from '../types/arabic';
+import { ActiveTab, AuthUser, ProficiencyLevel, VocabCard } from '../types/arabic';
 import { getUserInitials, isAdminUser, isPrimaryOwnerEmail } from '../utils/auth';
 import { computeWordsToday, GOAL_PRESETS } from './DailyGoalCard';
 import { PWAInstallButton } from './PWAInstallButton';
 import type { DailyStudyLog } from './WeeklyVocabChart';
 
+const NAVBAR_LEVEL_META: Array<{
+  level: ProficiencyLevel;
+  ar: string;
+  en: string;
+  descAr: string;
+}> = [
+  { level: 'beginner', ar: 'مبتدئ', en: 'Beginner', descAr: 'نصوصٌ مبسّطةٌ ومفرداتٌ يوميّةٌ' },
+  { level: 'intermediate', ar: 'متوسط', en: 'Intermediate', descAr: 'نصوصٌ ثقافيّةٌ وتراكيبُ متوسّطةٌ' },
+  { level: 'advanced', ar: 'متقدم', en: 'Advanced', descAr: 'نصوصٌ أدبيّةٌ وبلاغيّةٌ معمّقةٌ' },
+];
+
 interface NavbarProps {
   activeTab: ActiveTab;
   activeNavSection: 'home' | 'history' | 'levels' | 'vocabulary' | 'exams' | 'conversation';
+  selectedLevel: ProficiencyLevel;
+  onSelectLevel: (level: ProficiencyLevel) => void;
+  levelCounts?: Record<ProficiencyLevel, number>;
+  pendingDraftsCount?: number;
   onSelectHome: () => void;
   onSelectHistory: () => void;
   onSelectLevels: () => void;
@@ -49,6 +64,10 @@ interface NavbarProps {
 export function Navbar({
   activeTab,
   activeNavSection,
+  selectedLevel,
+  onSelectLevel,
+  levelCounts,
+  pendingDraftsCount = 0,
   onSelectHome,
   onSelectHistory,
   onSelectTab,
@@ -69,6 +88,7 @@ export function Navbar({
 }: NavbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [goalPopoverOpen, setGoalPopoverOpen] = useState(false);
+  const [levelMenuOpen, setLevelMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -77,6 +97,12 @@ export function Navbar({
   const menuRef = useRef<HTMLDivElement>(null);
   const goalRef = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
+  const levelRef = useRef<HTMLDivElement>(null);
+  const mobileLevelDropdownRef = useRef<HTMLDivElement>(null);
+  const mobileLevelTriggerRef = useRef<HTMLButtonElement>(null);
+
+  const activeLevelInfo =
+    NAVBAR_LEVEL_META.find((item) => item.level === selectedLevel) ?? NAVBAR_LEVEL_META[0];
 
   const safeGoal = Math.max(1, Math.min(50, dailyWordGoal));
   const wordsToday = useMemo(
@@ -107,16 +133,23 @@ export function Navbar({
   }, []);
 
   useEffect(() => {
-    if (!menuOpen && !statusNoteOpen && !goalPopoverOpen) return;
+    if (!menuOpen && !statusNoteOpen && !goalPopoverOpen && !levelMenuOpen) return;
     const handleOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (menuRef.current && !menuRef.current.contains(target)) {
         setMenuOpen(false);
       }
-      if (goalRef.current && !goalRef.current.contains(e.target as Node)) {
+      if (goalRef.current && !goalRef.current.contains(target)) {
         setGoalPopoverOpen(false);
       }
-      if (statusRef.current && !statusRef.current.contains(e.target as Node)) {
+      if (statusRef.current && !statusRef.current.contains(target)) {
         setStatusNoteOpen(false);
+      }
+      const inDesktopLevel = levelRef.current?.contains(target);
+      const inMobileDropdown = mobileLevelDropdownRef.current?.contains(target);
+      const inMobileTrigger = mobileLevelTriggerRef.current?.contains(target);
+      if (!inDesktopLevel && !inMobileDropdown && !inMobileTrigger) {
+        setLevelMenuOpen(false);
       }
     };
     const handleEscape = (e: KeyboardEvent) => {
@@ -124,6 +157,7 @@ export function Navbar({
         setMenuOpen(false);
         setGoalPopoverOpen(false);
         setStatusNoteOpen(false);
+        setLevelMenuOpen(false);
       }
     };
     window.addEventListener('mousedown', handleOutside);
@@ -132,7 +166,7 @@ export function Navbar({
       window.removeEventListener('mousedown', handleOutside);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [menuOpen, statusNoteOpen, goalPopoverOpen]);
+  }, [menuOpen, statusNoteOpen, goalPopoverOpen, levelMenuOpen]);
 
   const isLessonsActive =
     activeTab === 'lessons' ||
@@ -284,12 +318,19 @@ export function Navbar({
                         setMenuOpen(false);
                         onOpenUserManagement();
                       }}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] transition-colors cursor-pointer"
+                      className="flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] transition-colors cursor-pointer"
                     >
-                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#16200F] text-[#FACC15]">
-                        <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span className="flex items-center gap-2.5 min-w-0">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#16200F] text-[#FACC15]">
+                          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                        </span>
+                        <span className="truncate">الإدارة · Admin Panel</span>
                       </span>
-                      <span className="truncate">الإدارة · Admin Panel</span>
+                      {pendingDraftsCount > 0 && (
+                        <span className="rounded-md bg-[#2D3B22] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#FACC15] shrink-0">
+                          {pendingDraftsCount} drafts
+                        </span>
+                      )}
                     </button>
                   )}
 
@@ -634,21 +675,131 @@ export function Navbar({
         {/* Center Zone (Desktop & Tablet >= md): Primary 5 Navigation Items */}
         <nav
           aria-label="Primary navigation"
-          className="hidden md:flex min-w-0 flex-1 items-center justify-center gap-4 lg:gap-6 text-xs lg:text-sm font-medium overflow-x-auto touch-pan-x no-scrollbar px-1"
+          className="hidden md:flex min-w-0 flex-1 items-center justify-center gap-4 lg:gap-6 text-xs lg:text-sm font-medium overflow-visible px-1"
         >
-          <button
-            type="button"
-            onClick={() => onSelectTab('lessons')}
-            title="الدروس · Lessons"
-            className={`relative py-5 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15] ${
-              isLessonsActive
-                ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-[#FACC15]'
-                : 'text-[#DCE5D3] hover:text-white'
-            }`}
-          >
-            <span className="font-arabic-cairo">الدروس</span>
-            <span className="hidden xl:inline ml-1.5 text-xs opacity-80">Lessons</span>
-          </button>
+          <div className="relative flex flex-col items-center shrink-0" ref={levelRef}>
+            <div className="flex flex-col items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectTab('lessons');
+                }}
+                title="الدروس · Lessons"
+                className={`relative pt-2.5 pb-0.5 px-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15] ${
+                  isLessonsActive
+                    ? 'text-[#FEF08A] font-bold'
+                    : 'text-[#DCE5D3] hover:text-white'
+                }`}
+              >
+                <span className="font-arabic-cairo">الدروس</span>
+                <span className="hidden xl:inline ml-1.5 text-xs opacity-80">Lessons</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setLevelMenuOpen((prev) => !prev)}
+                aria-expanded={levelMenuOpen}
+                aria-label={`Selected level: ${activeLevelInfo.ar} (${activeLevelInfo.en}). Switch level`}
+                className={`mb-1.5 inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-bold leading-none transition-colors cursor-pointer ${
+                  levelMenuOpen || isLessonsActive
+                    ? 'border-[#FACC15]/70 bg-[#16200F] text-[#FACC15]'
+                    : 'border-white/20 bg-[#16200F]/65 text-[#FEF08A] hover:border-[#FACC15]/60'
+                }`}
+              >
+                <span dir="rtl" lang="ar" className="font-arabic-cairo">
+                  {activeLevelInfo.ar}
+                </span>
+                <ChevronDown
+                  className={`h-2.5 w-2.5 transition-transform duration-150 ${
+                    levelMenuOpen ? 'rotate-180' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
+
+            {isLessonsActive && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute bottom-0 left-0 right-0 h-0.5 bg-[#FACC15]"
+              />
+            )}
+
+            {levelMenuOpen && (
+              <div
+                role="menu"
+                aria-label="Switch Arabic proficiency level"
+                className="animate-popover-in absolute left-1/2 top-full mt-1.5 z-50 w-72 -translate-x-1/2 rounded-2xl border border-[#3E522D] bg-[#24301B] p-2 text-[#FAFBF8] shadow-2xl"
+              >
+                <div className="px-2.5 py-1.5 border-b border-white/10 mb-1 flex items-center justify-between text-[11px] text-[#DCE5D3]">
+                  <span>اختر المستوى · Switch Level</span>
+                  <span className="font-arabic-cairo font-bold text-[#FACC15]">
+                    {activeLevelInfo.ar}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {NAVBAR_LEVEL_META.map((item) => {
+                    const isSelected = selectedLevel === item.level;
+                    const count = levelCounts?.[item.level];
+                    return (
+                      <button
+                        key={item.level}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={isSelected}
+                        onClick={() => {
+                          onSelectLevel(item.level);
+                          onSelectTab('lessons');
+                          setLevelMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#3B4D2B] border border-[#FACC15]/65 text-white'
+                            : 'border border-transparent hover:bg-white/10 text-[#DCE5D3]'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span
+                              dir="rtl"
+                              lang="ar"
+                              className={`font-arabic-cairo text-xs font-bold ${
+                                isSelected ? 'text-[#FACC15]' : 'text-white'
+                              }`}
+                            >
+                              {item.ar}
+                            </span>
+                            <span className="text-xs font-semibold">{item.en}</span>
+                          </div>
+                          <p
+                            dir="rtl"
+                            lang="ar"
+                            className="font-arabic-cairo text-[10px] text-[#DCE5D3]/80 truncate mt-0.5"
+                          >
+                            {item.descAr}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {typeof count === 'number' && (
+                            <span className="font-mono text-[10px] font-bold text-[#FACC15] tabular-nums">
+                              {count}
+                            </span>
+                          )}
+                          {isSelected && (
+                            <CheckCircle2
+                              className="h-3.5 w-3.5 text-[#FACC15]"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
 
           <button
             type="button"
@@ -741,17 +892,38 @@ export function Navbar({
         aria-label="Mobile navigation"
         className="flex md:hidden items-center justify-between gap-1 border-t border-white/10 bg-[#16200F]/85 px-2.5 overflow-x-auto touch-pan-x no-scrollbar text-xs font-medium"
       >
-        <button
-          type="button"
-          onClick={() => onSelectTab('lessons')}
-          className={`relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
-            isLessonsActive
-              ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
-              : 'text-[#DCE5D3] hover:text-white'
-          }`}
-        >
-          <span className="font-arabic-cairo">الدروس</span>
-        </button>
+        <div className="relative flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => onSelectTab('lessons')}
+            className={`relative py-2 px-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation flex flex-col items-center leading-tight ${
+              isLessonsActive
+                ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
+                : 'text-[#DCE5D3] hover:text-white'
+            }`}
+          >
+            <span className="font-arabic-cairo">الدروس</span>
+            <span className="text-[10px] font-bold text-[#FACC15] leading-none mt-0.5">
+              {activeLevelInfo.ar}
+            </span>
+          </button>
+
+          <button
+            ref={mobileLevelTriggerRef}
+            type="button"
+            onClick={() => setLevelMenuOpen((prev) => !prev)}
+            aria-expanded={levelMenuOpen}
+            aria-label={`Switch level (current: ${activeLevelInfo.ar})`}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#FACC15]/45 bg-[#24301B] text-[#FACC15] cursor-pointer touch-manipulation"
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                levelMenuOpen ? 'rotate-180' : ''
+              }`}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
 
         <button
           type="button"
@@ -807,6 +979,55 @@ export function Navbar({
           )}
         </button>
       </nav>
+
+      {/* Mobile Non-Clipped Level Switcher Popover */}
+      {levelMenuOpen && (
+        <div
+          ref={mobileLevelDropdownRef}
+          role="menu"
+          aria-label="Mobile level switcher"
+          className="animate-popover-in md:hidden border-t border-[#FACC15]/30 bg-[#24301B] px-3 py-2.5 shadow-xl"
+        >
+          <div className="grid grid-cols-3 gap-2">
+            {NAVBAR_LEVEL_META.map((item) => {
+              const isSelected = selectedLevel === item.level;
+              const count = levelCounts?.[item.level];
+              return (
+                <button
+                  key={item.level}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={isSelected}
+                  onClick={() => {
+                    onSelectLevel(item.level);
+                    onSelectTab('lessons');
+                    setLevelMenuOpen(false);
+                  }}
+                  className={`flex flex-col items-center justify-center rounded-xl border px-2 py-2 text-center transition-colors cursor-pointer touch-manipulation ${
+                    isSelected
+                      ? 'border-[#FACC15] bg-[#3B4D2B] text-white'
+                      : 'border-white/15 bg-[#16200F]/60 text-[#DCE5D3] hover:bg-white/10'
+                  }`}
+                >
+                  <span
+                    dir="rtl"
+                    lang="ar"
+                    className={`font-arabic-cairo text-xs font-bold ${
+                      isSelected ? 'text-[#FACC15]' : 'text-white'
+                    }`}
+                  >
+                    {item.ar}
+                  </span>
+                  <span className="text-[10px] font-medium opacity-85">
+                    {item.en}
+                    {typeof count === 'number' ? ` (${count})` : ''}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </header>
   );
 }

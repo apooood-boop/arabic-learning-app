@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
-  Clock,
   Flame,
   HelpCircle,
   Layers,
@@ -10,7 +9,6 @@ import {
   NotebookPen,
   RotateCcw,
   RotateCw,
-  Sparkles,
   Volume2,
   Zap,
 } from 'lucide-react';
@@ -526,9 +524,8 @@ export function PracticeMode({
                   No Words Marked as Difficult Yet
                 </h2>
                 <p className="text-sm text-[#5A6552] max-w-md mx-auto leading-relaxed">
-                  While studying in <span className="font-semibold text-[#1F2718]">My Vocabulary</span>, flip any flashcard and tap{' '}
-                  <span className="font-semibold text-[#C2410C]">Mark Hard</span> — or choose{' '}
-                  <span className="font-semibold text-[#C2410C]">صعبة / Hard</span> during SRS practice — to collect tricky words here for focused review.
+                  While studying in <span className="font-semibold text-[#1F2718]">My Vocabulary</span> or SRS Practice, flip any flashcard and choose{' '}
+                  <span className="font-semibold text-[#C2410C]">صعب / Hard</span> — or tap the flame icon on a card — to collect tricky words here for focused review.
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
@@ -638,14 +635,27 @@ export function PracticeMode({
                 large
                 controlledFlipped={isFlipped}
                 onFlipChange={setIsFlipped}
-                onToggleDifficult={onToggleDifficult}
+                onRateSrs={(_id, rating) => handleSrsRate(rating)}
                 onEdit={onEditCard}
+                onPrevCard={() => {
+                  setIsFlipped(false);
+                  setCurrentIndex((prev) => Math.max(0, prev - 1));
+                }}
+                onNextCard={() => {
+                  if (currentIndex + 1 < deck.length) {
+                    setIsFlipped(false);
+                    setCurrentIndex((prev) => prev + 1);
+                  }
+                }}
+                canGoPrev={currentIndex > 0}
+                canGoNext={currentIndex + 1 < deck.length}
+                cardPositionLabel={`${currentIndex + 1}/${deck.length}`}
               />
 
-              {/* Spaced Repetition Grading Controls */}
-              <div className="space-y-3 pt-2">
+              {/* Compact Bottom Controls (No redundant external rating panel on mobile) */}
+              <div className="space-y-2.5 pt-1">
                 {!isFlipped ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2.5">
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
@@ -654,7 +664,7 @@ export function PracticeMode({
                           setIsFlipped(false);
                           setCurrentIndex((prev) => Math.max(0, prev - 1));
                         }}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-xs font-semibold text-[#1F2718] hover:bg-[#EEF2E9] disabled:opacity-40 transition-colors cursor-pointer"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 text-xs font-semibold text-[#1F2718] hover:bg-[#EEF2E9] disabled:opacity-40 transition-colors cursor-pointer touch-manipulation"
                       >
                         <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
                         <span>Previous</span>
@@ -692,22 +702,22 @@ export function PracticeMode({
                             });
                           }
                         }}
-                        className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2.5 text-xs font-semibold transition-all cursor-pointer ${
+                        className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2.5 text-xs font-semibold transition-all cursor-pointer touch-manipulation ${
                           wordAudioState !== 'idle'
-                            ? 'border-[#2D3B22] bg-[#2D3B22] text-[#E8B948] ring-4 ring-[#DCE5D3]'
+                            ? 'border-[#2D3B22] bg-[#2D3B22] text-[#FACC15] ring-4 ring-[#DCE5D3]'
                             : 'border-[#DCE5D3] bg-white text-[#1F2718] hover:bg-[#FBF3DC]'
                         }`}
                       >
                         {wordAudioState === 'loading' ? (
                           <>
-                            <Loader2 className="h-3.5 w-3.5 text-[#E8B948] animate-spin" aria-hidden="true" />
+                            <Loader2 className="h-3.5 w-3.5 text-[#FACC15] animate-spin" aria-hidden="true" />
                             <span>Loading...</span>
                           </>
                         ) : (
                           <>
                             <Volume2
                               className={`h-3.5 w-3.5 ${
-                                wordAudioState === 'playing' ? 'text-[#E8B948] animate-pulse' : 'text-[#9A6F14]'
+                                wordAudioState === 'playing' ? 'text-[#FACC15] animate-pulse' : 'text-[#9A6F14]'
                               }`}
                               aria-hidden="true"
                             />
@@ -720,69 +730,22 @@ export function PracticeMode({
                     <button
                       type="button"
                       onClick={() => setIsFlipped(true)}
-                      className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-[#2D3B22] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#3E522D] shadow-xs transition-colors cursor-pointer"
+                      className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-[#2D3B22] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#3B4D2B] shadow-xs transition-colors cursor-pointer touch-manipulation"
                     >
-                      <RotateCw className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
-                      <span>Flip Card to Rate Recall</span>
+                      <RotateCw className="h-4 w-4 text-[#FACC15]" aria-hidden="true" />
+                      <span>Flip Card</span>
                     </button>
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-[#DCE5D3] bg-white p-4 shadow-xs space-y-3">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-[#1F2718]">
-                        How well did you recall this word?
-                      </span>
-                      <span className="font-mono text-[#6B7861]">Keys: 1 · 2 · 3</span>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-                      <button
-                        type="button"
-                        onClick={() => handleSrsRate('hard')}
-                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-orange-200 bg-[#FEF2E8] px-4 py-3 text-[#9A3412] hover:bg-orange-100/70 transition-colors cursor-pointer"
-                      >
-                        <span className="inline-flex items-center gap-1.5 text-sm font-bold">
-                          <Flame className="h-4 w-4 text-[#C2410C]" aria-hidden="true" />
-                          <span>صعبة / Hard</span>
-                        </span>
-                        <span className="text-[11px] font-medium text-[#C2410C]">
-                          Review Soon
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSrsRate('good')}
-                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-[#E8D7A7] bg-[#FBF3DC] px-4 py-3 text-[#1F2718] hover:bg-[#F5E7BC] transition-colors cursor-pointer"
-                      >
-                        <span className="inline-flex items-center gap-1.5 text-sm font-bold">
-                          <Clock className="h-4 w-4 text-[#9A6F14]" aria-hidden="true" />
-                          <span>جيدة / Good</span>
-                        </span>
-                        <span className="text-[11px] font-medium text-[#9A6F14]">
-                          Review in 2 days
-                        </span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSrsRate('easy')}
-                        className="flex flex-col items-center justify-center gap-1 rounded-xl border border-[#2D3B22] bg-[#2D3B22] px-4 py-3 text-white hover:bg-[#3E522D] transition-colors cursor-pointer"
-                      >
-                        <span className="inline-flex items-center gap-1.5 text-sm font-bold">
-                          <Sparkles className="h-4 w-4 text-[#E8B948]" aria-hidden="true" />
-                          <span>سهلة / Easy</span>
-                        </span>
-                        <span className="text-[11px] font-medium text-[#EEF2E9]">
-                          Review in a week
-                        </span>
-                      </button>
-                    </div>
-                  </div>
+                  <p className="text-center text-xs font-medium text-[#5A6552]">
+                    Tap <span className="font-arabic-cairo font-bold text-[#9A3412]">صعب</span>,{' '}
+                    <span className="font-arabic-cairo font-bold text-[#7A5B10]">جيد</span>, or{' '}
+                    <span className="font-arabic-cairo font-bold text-[#2D3B22]">سهل</span> at the bottom of the card to rate recall
+                  </p>
                 )}
               </div>
 
-              <p className="text-center text-xs text-[#5A6552]">
+              <p className="hidden sm:block text-center text-xs text-[#5A6552]">
                 Shortcuts: <span className="font-mono">Space</span> flip ·{' '}
                 <span className="font-mono">L</span> pronounce
                 {isFlipped && (

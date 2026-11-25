@@ -4,6 +4,7 @@ import {
   ArrowRight,
   BookOpen,
   Check,
+  CheckCircle2,
   ChevronDown,
   Download,
   Eye,
@@ -12,12 +13,14 @@ import {
   FileSpreadsheet,
   Flame,
   HelpCircle,
+  Languages,
   Layers,
   LayoutGrid,
   Loader2,
   NotebookPen,
   Pencil,
   Play,
+  RefreshCw,
   RotateCw,
   Search,
   SquareStack,
@@ -26,7 +29,14 @@ import {
   Zap,
 } from 'lucide-react';
 import { enrichWordMeta, getLexiconSpeechText } from '../data/fallbackLexicon';
-import { NoteContextTag, PracticeStatus, SrsRating, VocabCard } from '../types/arabic';
+import {
+  AuthUser,
+  NoteContextTag,
+  PracticeStatus,
+  SrsRating,
+  VocabCard,
+  WordAnalysis,
+} from '../types/arabic';
 import {
   applySmartPartialTashkeel,
   speakArabic,
@@ -35,6 +45,12 @@ import {
   unlockArabicAudioContext,
 } from '../utils/arabic';
 import { exportVocabularyAsCsv, exportVocabularyAsJson } from '../utils/exportVocab';
+import {
+  isCardMissingOrPlaceholderTranslation,
+  repairMissingCardTranslations,
+  type TranslationRepairProgress,
+  type TranslationRepairSummary,
+} from '../utils/vocabTranslationRepair';
 import { EditVocabCardModal } from './EditVocabCardModal';
 import { Flashcard3D } from './Flashcard3D';
 import { PracticeMode, PracticeScope } from './PracticeMode';
@@ -46,6 +62,8 @@ type CardsViewMode = 'grid' | 'focus';
 interface VocabularyViewProps {
   cards: VocabCard[];
   speechRate: number;
+  currentUser?: AuthUser | null;
+  analysisCache?: Record<string, WordAnalysis>;
   initialScope?: PracticeScope;
   scopeRequestSeq?: number;
   initialMode?: VocabStudyMode;
@@ -53,6 +71,8 @@ interface VocabularyViewProps {
   onToggleDifficult?: (id: string) => void;
   onRateSrs?: (id: string, rating: SrsRating) => void;
   onEditCard?: (updatedCard: VocabCard, previousCard: VocabCard) => void;
+  onCardsRepaired?: (nextCards: VocabCard[]) => void;
+  onAnalysisCacheRepaired?: (nextCache: Record<string, WordAnalysis>) => void;
   onDeleteCard: (id: string) => void;
   onGoToLessons: () => void;
   onRecordReview: () => void;
@@ -63,6 +83,8 @@ interface VocabularyViewProps {
 export function VocabularyView({
   cards,
   speechRate,
+  currentUser = null,
+  analysisCache,
   initialScope = 'all',
   scopeRequestSeq = 0,
   initialMode = 'cards',
@@ -70,6 +92,8 @@ export function VocabularyView({
   onToggleDifficult,
   onRateSrs,
   onEditCard,
+  onCardsRepaired,
+  onAnalysisCacheRepaired,
   onDeleteCard,
   onGoToLessons,
   onRecordReview,
@@ -97,6 +121,9 @@ export function VocabularyView({
   } | null>(null);
   const [speakingTranslationId, setSpeakingTranslationId] = useState<string | null>(null);
   const [translationSpeechNotice, setTranslationSpeechNotice] = useState<string | null>(null);
+  const [repairingTranslations, setRepairingTranslations] = useState(false);
+  const [repairProgress, setRepairProgress] = useState<TranslationRepairProgress | null>(null);
+  const [repairSummary, setRepairSummary] = useState<TranslationRepairSummary | null>(null);
 
   // Interactive Focus Card navigation state + slide animation direction
   const [focusIndex, setFocusIndex] = useState(0);
@@ -160,6 +187,30 @@ export function VocabularyView({
     [cards]
   );
   const reviewCount = cards.length - learnedCount;
+  const cardsNeedingTranslationFix = useMemo(
+    () => cards.filter((c) => isCardMissingOrPlaceholderTranslation(c)),
+    [cards]
+  );
+
+  const handleRepairMissingTranslations = useCallback(async () => {
+    if (repairingTranslations || !onCardsRepaired) return;
+    setRepairingTranslations(true);
+    setRepairProgress(null);
+    try {
+      const { summary } = await repairMissingCardTranslations({
+        activeUser: currentUser,
+        cards,
+        analysisCache,
+        onCardsRepaired,
+        onAnalysisCacheRepaired,
+        onProgress: (progress) => setRepairProgress(progress),
+      });
+      setRepairSummary(summary);
+    } finally {
+      setRepairingTranslations(false);
+      setRepairProgress(null);
+    }
+  }, [analysisCache, cards, currentUser, onAnalysisCacheRepaired, onCardsRepaired, repairingTranslations]);
 
   const filteredCards = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -797,6 +848,150 @@ export function VocabularyView({
                 </div>
               )}
 
+              {onCardsRepaired &&
+                (cardsNeedingTranslationFix.length > 0 ||
+                  repairingTranslations ||
+                  repairSummary !== null) && (
+                  <div className="rounded-2xl border border-[#D4A338]/60 bg-white px-4 py-3.5 shadow-2xs space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#FBF3DC] text-[#9A6F14] border border-[#E5CE8F]">
+                          <Languages className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        <div>
+                          <p className="text-xs font-bold text-[#1F2718]">
+                            {cardsNeedingTranslationFix.length > 0
+                              ? `${cardsNeedingTranslationFix.length} flashcard${
+                                  cardsNeedingTranslationFix.length === 1 ? '' : 's'
+                                } need translation`
+                              : 'Flashcards Translation Maintenance'}
+                            <span className="mx-1.5 text-[#DCE5D3]" aria-hidden="true">
+                              ·
+                            </span>
+                            <span className="font-arabic-cairo text-[#2D3B22]">
+                              إصلاح الترجمات الناقصة
+                            </span>
+                          </p>
+                          <p className="text-[11px] text-[#5A6552]">
+                            Automatically resolves pending or placeholder card meanings and syncs
+                            updates to your deck.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {repairSummary &&
+                          !repairingTranslations &&
+                          cardsNeedingTranslationFix.length === 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setRepairSummary(null)}
+                              className="rounded-lg px-2.5 py-1.5 text-[11px] font-semibold text-[#5A6552] hover:bg-[#EEF2E9] cursor-pointer"
+                            >
+                              Dismiss
+                            </button>
+                          )}
+                        <button
+                          type="button"
+                          onClick={handleRepairMissingTranslations}
+                          disabled={
+                            repairingTranslations ||
+                            (cardsNeedingTranslationFix.length === 0 && repairSummary === null)
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#2D3B22] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#3B4D2B] disabled:opacity-60 transition-colors cursor-pointer"
+                        >
+                          {repairingTranslations ? (
+                            <Loader2
+                              className="h-3.5 w-3.5 animate-spin text-[#FACC15]"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <RefreshCw className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                          )}
+                          <span>
+                            {repairingTranslations
+                              ? 'Translating...'
+                              : cardsNeedingTranslationFix.length > 0
+                                ? `Fix Missing Translations (${cardsNeedingTranslationFix.length})`
+                                : 'Re-scan Deck'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {repairingTranslations && repairProgress && (
+                      <div className="rounded-xl border border-[#E5CE8F] bg-[#FBF3DC]/70 px-3 py-2 text-xs text-[#2D3B22] flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold">
+                          {repairProgress.phase === 'syncing'
+                            ? 'Syncing repaired flashcards to Supabase...'
+                            : `Fixing ${repairProgress.completed + 1} / ${repairProgress.total}: `}
+                          {repairProgress.phase === 'translating' && repairProgress.currentWord && (
+                            <span
+                              dir="rtl"
+                              lang="ar"
+                              className="font-arabic-scheherazade text-base font-bold text-[#1F2718] ml-1"
+                            >
+                              {repairProgress.currentWord}
+                            </span>
+                          )}
+                        </span>
+                        <span className="font-mono text-[11px] text-[#5A6552]">
+                          Fixed: {repairProgress.fixedCount} · Retry: {repairProgress.retryCount}
+                        </span>
+                      </div>
+                    )}
+
+                    {repairSummary && !repairingTranslations && (
+                      <div className="rounded-xl border border-[#CDE0C4] bg-[#EEF2E9]/70 px-3 py-2.5 text-xs text-[#1F2718] space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-bold text-[#2D3B22] flex items-center gap-1.5">
+                            <CheckCircle2 className="h-4 w-4 text-[#2D3B22]" aria-hidden="true" />
+                            <span>
+                              {repairSummary.affectedCount === 0
+                                ? `All ${repairSummary.scannedCount} cards have valid translations.`
+                                : `Fixed ${repairSummary.fixedCount} card(s)${
+                                    repairSummary.retryCount > 0
+                                      ? ` · ${repairSummary.retryCount} still need retry`
+                                      : ''
+                                  }`}
+                            </span>
+                          </span>
+                          {repairSummary.supabaseAttempted && (
+                            <span
+                              className={`text-[11px] font-semibold ${
+                                repairSummary.supabaseSynced
+                                  ? 'text-[#2D3B22]'
+                                  : 'text-rose-700'
+                              }`}
+                            >
+                              {repairSummary.supabaseSynced
+                                ? `Synced ${repairSummary.supabaseSyncedCount} card(s) to Supabase`
+                                : `Supabase sync error: ${repairSummary.supabaseError || 'Please retry'}`}
+                            </span>
+                          )}
+                        </div>
+
+                        {repairSummary.retryItems.length > 0 && (
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#CDE0C4] pt-1.5 text-[11px] text-[#7A560B]">
+                            <span>
+                              Needs retry:{' '}
+                              {repairSummary.retryItems.map((item) => item.word).join('، ')}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleRepairMissingTranslations}
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#2D3B22] px-2.5 py-1 font-bold text-white hover:bg-[#3B4D2B] cursor-pointer"
+                            >
+                              <RefreshCw className="h-3 w-3 text-[#FACC15]" aria-hidden="true" />
+                              <span>Retry</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
               {filteredCards.length === 0 ? (
                 <div className="rounded-2xl border border-[#DCE5D3] bg-white p-10 text-center text-sm text-[#5A6552]">
                   {filter === 'hard' && !query
@@ -1165,12 +1360,27 @@ export function VocabularyView({
                         large
                         controlledFlipped={focusFlipped}
                         onFlipChange={setFocusFlipped}
-                        onUpdateStatus={onUpdateStatus}
-                        onToggleDifficult={onToggleDifficult}
+                        onRateSrs={
+                          onRateSrs
+                            ? (id, rating) => {
+                                onRateSrs(id, rating);
+                                if (filteredCards.length > 1) {
+                                  jumpToFocusCard(focusIndex + 1);
+                                } else {
+                                  setFocusFlipped(false);
+                                }
+                              }
+                            : undefined
+                        }
                         onEdit={onEditCard ? (c) => setEditingCard(c) : undefined}
                         onDelete={onDeleteCard}
                         onSpeakTranslation={handleSpeakTranslation}
                         isSpeakingTranslation={speakingTranslationId === activeFocusCard.id}
+                        onPrevCard={() => jumpToFocusCard(focusIndex - 1)}
+                        onNextCard={() => jumpToFocusCard(focusIndex + 1)}
+                        canGoPrev={filteredCards.length > 1}
+                        canGoNext={filteredCards.length > 1}
+                        cardPositionLabel={`${focusIndex + 1}/${filteredCards.length}`}
                       />
                     </div>
                   )}

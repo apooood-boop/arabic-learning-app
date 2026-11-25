@@ -7,15 +7,12 @@ import {
   BookOpen,
   CheckCircle2,
   Clock,
-  Compass,
-  Crown,
   Flame,
   GraduationCap,
   Layers,
   LogIn,
   NotebookPen,
   Plus,
-  Sprout,
   Trash2,
   Video,
   Volume2,
@@ -28,7 +25,7 @@ import { ExamsView } from './components/ExamsView';
 import { LandingPage } from './components/LandingPage';
 import { LessonReader } from './components/LessonReader';
 import { Navbar } from './components/Navbar';
-import { NotesDrawer } from './components/NotesDrawer';
+import { NotesDrawer, type SaveNoteResult } from './components/NotesDrawer';
 import { PracticeScope } from './components/PracticeMode';
 import { ReadingHistoryView } from './components/ReadingHistoryView';
 import { UserManagementModal } from './components/UserManagementModal';
@@ -54,12 +51,22 @@ import {
   WordAnalysis,
 } from './types/arabic';
 import { getActiveUser, isAdminUser, logoutUser } from './utils/auth';
+import { runDailyCurriculumAgent } from './utils/dailyCurriculumAgent';
 import { isSupabaseConfigured } from './utils/supabaseClient';
 import {
+  canUserDeleteLesson,
+  canUserViewPublishedLesson,
+  deleteLessonFromCloudWithResult,
+  deleteStudyNoteFromCloud,
+  fetchLessonsFromCloudDetailed,
   fetchStudyNotesFromCloud,
   fetchUserProgressFromCloud,
   fetchVocabCardsFromCloud,
+  isPrivilegedLessonRole,
+  resolveLessonPublicFlag,
+  upsertLessonToCloudWithResult,
   upsertStudyNotesToCloud,
+  upsertStudyNoteToCloud,
   upsertUserProgressToCloud,
   upsertVocabCardsToCloud,
 } from './utils/supabaseSync';
@@ -256,10 +263,15 @@ export default function App() {
     'qalam_custom_lessons',
     []
   );
+  const [generatingDailyDrafts, setGeneratingDailyDrafts] = useState(false);
+  const [dailyCurriculumNotice, setDailyCurriculumNotice] = useState<string | null>(null);
 
   const initialNavRef = useRef<ReturnType<typeof resolveInitialNavigation> | null>(null);
   if (initialNavRef.current === null) {
-    const initialLessons = canAddContent ? [...customLessons, ...SAMPLE_LESSONS] : SAMPLE_LESSONS;
+    const initialVisibleCustom = customLessons.filter((l) =>
+      canUserViewPublishedLesson(l, currentUser)
+    );
+    const initialLessons = [...initialVisibleCustom, ...SAMPLE_LESSONS];
     const initialLessonIds = new Set(initialLessons.map((l) => l.id));
     initialNavRef.current = resolveInitialNavigation(
       Boolean(currentUser),
@@ -329,6 +341,8 @@ export default function App() {
   const [notesContext, setNotesContext] = useState<NoteContextTag | null>(null);
   const [apiNotice, setApiNotice] = useState<string | null>(null);
   const [audioToast, setAudioToast] = useState<string | null>(null);
+  const [lessonToast, setLessonToast] = useState<{ ok: boolean; message: string } | null>(null);
+  const [resolvedCloudUserId, setResolvedCloudUserId] = useState<string | null>(null);
   const [publishNotice, setPublishNotice] = useState<{
     lessonId: string;
     title: string;
@@ -349,12 +363,24 @@ export default function App() {
   const inFlightRequests = useRef<Map<string, Promise<WordAnalysis>>>(new Map());
   const levelsSectionRef = useRef<HTMLElement | null>(null);
   const audioToastTimerRef = useRef<number | null>(null);
+  const lessonToastTimerRef = useRef<number | null>(null);
   const pendingInitialScrollRef = useRef<number>(initialNavRef.current.restoreScrollY);
   const hasRestoredInitialScrollRef = useRef<boolean>(
     initialNavRef.current.restoreScrollY <= 0
   );
   const hasInitializedRouteSyncRef = useRef<boolean>(false);
   const isSyncingFromHistoryRef = useRef<boolean>(false);
+
+  const showLessonToast = useCallback((ok: boolean, message: string) => {
+    setLessonToast({ ok, message });
+    if (lessonToastTimerRef.current !== null) {
+      window.clearTimeout(lessonToastTimerRef.current);
+    }
+    lessonToastTimerRef.current = window.setTimeout(() => {
+      setLessonToast(null);
+      lessonToastTimerRef.current = null;
+    }, 6000);
+  }, []);
 
   useEffect(() => {
     const handleTtsNotice = (event: Event) => {
@@ -385,20 +411,104 @@ export default function App() {
       if (audioToastTimerRef.current !== null) {
         window.clearTimeout(audioToastTimerRef.current);
       }
+      if (lessonToastTimerRef.current !== null) {
+        window.clearTimeout(lessonToastTimerRef.current);
+      }
     };
   }, []);
+
+  // Load public/authorized cloud lessons from Supabase `lessons` table
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    let isMounted = true;
+
+    async function loadCloudLessons() {
+      const res = await fetchLessonsFromCloudDetailed(currentUser);
+      if (!isMounted) return;
+      if (res.resolvedUserId) {
+        setResolvedCloudUserId(res.resolvedUserId);
+      }
+      if (!res.ok) {
+        console.error('[Qalam Lessons] Failed to load lessons from Supabase:', res.error);
+        return;
+      }
+      if (res.lessons.length === 0) return;
+
+      setCustomLessons((local) => {
+        const map = new Map<string, Lesson>();
+        for (const item of res.lessons) {
+          map.set(item.id, item);
+        }
+        for (const item of local) {
+          if (!map.has(item.id)) {
+            map.set(item.id, item);
+          }
+        }
+        return Array.from(map.values()).sort(
+          (a, b) => (b.createdAt || 0) - (a.createdAt || 0)
+        );
+      });
+    }
+
+    void loadCloudLessons();
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser?.id, currentUser?.role, setCustomLessons]);
+
+  // Daily Curriculum Agent: generates 2 drafts per level (6/day) saved as status='draft', isPublic=false for admin review
+  useEffect(() => {
+    if (!currentUser || currentUser.isGuest) return;
+    let isMounted = true;
+
+    async function checkAndRunDailyCurriculum() {
+      try {
+        const result = await runDailyCurriculumAgent({
+          existingLessons: customLessons,
+          currentUser,
+          force: false,
+        });
+        if (!isMounted || result.skipped || result.addedLessons.length === 0) return;
+
+        setCustomLessons((prev) => {
+          const existingIds = new Set(prev.map((l) => l.id));
+          const fresh = result.addedLessons.filter((l) => !existingIds.has(l.id));
+          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+        });
+
+        if (isAdminUser(currentUser)) {
+          setDailyCurriculumNotice(
+            `Daily Curriculum Agent generated ${result.addedLessons.length} draft lessons for ${result.date} (awaiting approval in Pending Drafts).`
+          );
+        }
+      } catch (err) {
+        console.warn('[Qalam Curriculum Agent] Daily check error:', err);
+      }
+    }
+
+    const timer = window.setTimeout(() => {
+      void checkAndRunDailyCurriculum();
+    }, 1200);
+
+    return () => {
+      isMounted = false;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
 
   // Bi-directional Supabase Cloud Data Sync for authenticated users
   useEffect(() => {
     if (!currentUser || currentUser.isGuest || !isSupabaseConfigured()) return;
     const userId = currentUser.id;
+    const activeAccount = currentUser;
     let isMounted = true;
 
     async function loadInitialCloudData() {
       try {
         const [cloudCards, cloudNotes, cloudProgress] = await Promise.all([
-          fetchVocabCardsFromCloud(userId),
-          fetchStudyNotesFromCloud(userId),
+          fetchVocabCardsFromCloud(activeAccount),
+          fetchStudyNotesFromCloud(activeAccount),
           fetchUserProgressFromCloud(userId),
         ]);
 
@@ -414,11 +524,11 @@ export default function App() {
               }
             }
             const merged = Array.from(map.values());
-            void upsertVocabCardsToCloud(userId, merged);
+            void upsertVocabCardsToCloud(activeAccount, merged);
             return merged;
           });
         } else if (vocabCards.length > 0) {
-          void upsertVocabCardsToCloud(userId, vocabCards);
+          void upsertVocabCardsToCloud(activeAccount, vocabCards);
         }
 
         if (cloudNotes && cloudNotes.length > 0) {
@@ -431,11 +541,11 @@ export default function App() {
               }
             }
             const merged = Array.from(map.values());
-            void upsertStudyNotesToCloud(userId, merged);
+            void upsertStudyNotesToCloud(activeAccount, merged);
             return merged;
           });
         } else if (studyNotes.length > 0) {
-          void upsertStudyNotesToCloud(userId, studyNotes);
+          void upsertStudyNotesToCloud(activeAccount, studyNotes);
         }
 
         if (cloudProgress) {
@@ -480,20 +590,26 @@ export default function App() {
     if (prevCardsRef.current !== vocabCards) {
       prevCardsRef.current = vocabCards;
       const timer = window.setTimeout(() => {
-        void upsertVocabCardsToCloud(currentUser.id, vocabCards);
+        void upsertVocabCardsToCloud(currentUser, vocabCards);
       }, 700);
       return () => window.clearTimeout(timer);
     }
-  }, [vocabCards, currentUser?.id]);
+  }, [vocabCards, currentUser]);
 
-  // Cloud auto-sync when notes change
+  // Cloud auto-sync when notes change externally
   const prevNotesRef = useRef(studyNotes);
+  const skipNextNotesAutoSyncRef = useRef(false);
   useEffect(() => {
     if (!currentUser || currentUser.isGuest || !isSupabaseConfigured()) return;
     if (prevNotesRef.current !== studyNotes) {
       prevNotesRef.current = studyNotes;
+      if (skipNextNotesAutoSyncRef.current) {
+        skipNextNotesAutoSyncRef.current = false;
+        return;
+      }
+      const account = currentUser;
       const timer = window.setTimeout(() => {
-        void upsertStudyNotesToCloud(currentUser.id, studyNotes);
+        void upsertStudyNotesToCloud(account, studyNotes);
       }, 700);
       return () => window.clearTimeout(timer);
     }
@@ -523,9 +639,33 @@ export default function App() {
     currentUser?.id,
   ]);
 
-  const allLessons = useMemo(
-    () => (canAddContent ? [...customLessons, ...SAMPLE_LESSONS] : SAMPLE_LESSONS),
-    [canAddContent, customLessons]
+  const allLessons = useMemo(() => {
+    const map = new Map<string, Lesson>();
+    for (const lesson of customLessons) {
+      if (canUserViewPublishedLesson(lesson, currentUser, resolvedCloudUserId)) {
+        map.set(lesson.id, lesson);
+      }
+    }
+    for (const sample of SAMPLE_LESSONS) {
+      if (!map.has(sample.id)) {
+        map.set(sample.id, { ...sample, isPublic: true, status: 'published' });
+      }
+    }
+    return Array.from(map.values());
+  }, [customLessons, currentUser, resolvedCloudUserId]);
+
+  const levelCounts = useMemo<Record<ProficiencyLevel, number>>(
+    () => ({
+      beginner: allLessons.filter((l) => l.level === 'beginner').length,
+      intermediate: allLessons.filter((l) => l.level === 'intermediate').length,
+      advanced: allLessons.filter((l) => l.level === 'advanced').length,
+    }),
+    [allLessons]
+  );
+
+  const pendingDraftLessons = useMemo(
+    () => customLessons.filter((lesson) => lesson.status === 'draft'),
+    [customLessons]
   );
 
   const filteredLessons = useMemo(
@@ -903,19 +1043,76 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleAddLesson = (lesson: Lesson) => {
-    if (!canAddContent) return;
-    setCustomLessons((prev) => [lesson, ...prev]);
-    setSelectedLevel(lesson.level);
+  const handleAddLesson = async (lesson: Lesson) => {
+    if (!canAddContent || !currentUser) return;
+    const authorRole = currentUser.role ?? lesson.authorRole ?? 'student';
+    const isPublic = isPrivilegedLessonRole(authorRole);
+    const normalizedLesson: Lesson = {
+      ...lesson,
+      authorId: resolvedCloudUserId || lesson.authorId || currentUser.id,
+      authorName: lesson.authorName ?? currentUser.name ?? 'Contributor',
+      authorRole,
+      status: 'published',
+      isPublic: resolveLessonPublicFlag(authorRole, 'published', isPublic),
+    };
+
+    setCustomLessons((prev) => [normalizedLesson, ...prev]);
+    setSelectedLevel(normalizedLesson.level);
     setActiveTab('lessons');
     setActiveNavSection('levels');
     setActiveLessonId(null);
     setPublishNotice({
-      lessonId: lesson.id,
-      title: lesson.titleAr || lesson.titleEn,
-      levelEn: LEVEL_LABELS[lesson.level].en,
-      levelAr: LEVEL_LABELS[lesson.level].ar,
+      lessonId: normalizedLesson.id,
+      title: normalizedLesson.titleAr || normalizedLesson.titleEn,
+      levelEn: LEVEL_LABELS[normalizedLesson.level].en,
+      levelAr: LEVEL_LABELS[normalizedLesson.level].ar,
     });
+
+    if (isSupabaseConfigured()) {
+      const cloudRes = await upsertLessonToCloudWithResult(currentUser, normalizedLesson);
+      if (cloudRes.ok) {
+        if (cloudRes.userId) {
+          setResolvedCloudUserId(cloudRes.userId);
+        }
+        if (cloudRes.lesson) {
+          const synced = cloudRes.lesson;
+          setCustomLessons((prev) =>
+            prev.map((item) =>
+              item.id === normalizedLesson.id
+                ? {
+                    ...normalizedLesson,
+                    id: synced.id || normalizedLesson.id,
+                    authorId: synced.authorId || normalizedLesson.authorId,
+                    isPublic: synced.isPublic,
+                    status: synced.status,
+                  }
+                : item
+            )
+          );
+          if (synced.id && synced.id !== normalizedLesson.id) {
+            setPublishNotice((prev) =>
+              prev && prev.lessonId === normalizedLesson.id
+                ? { ...prev, lessonId: synced.id }
+                : prev
+            );
+          }
+        }
+        showLessonToast(
+          true,
+          normalizedLesson.isPublic
+            ? 'Lesson saved to Supabase (Public for all users · للجميع).'
+            : 'Lesson saved to Supabase (Private to your account · خاص بك).'
+        );
+      } else {
+        console.error('[Qalam Lessons] Failed to save lesson to Supabase:', cloudRes.error);
+        showLessonToast(
+          false,
+          `Saved locally, but Supabase save failed: ${cloudRes.error || 'Unknown error'}`
+        );
+      }
+    } else {
+      showLessonToast(true, 'Lesson saved locally (Supabase is not configured).');
+    }
   };
 
   const handleOpenAuth = (mode: 'login' | 'register' = 'login') => {
@@ -927,6 +1124,7 @@ export default function App() {
     clearNavigationPersistence(sessionScope);
     logoutUser();
     setCurrentUser(null);
+    setResolvedCloudUserId(null);
     setActiveLessonId(null);
     setActiveTab('lessons');
     setActiveNavSection('home');
@@ -935,14 +1133,122 @@ export default function App() {
     setIsNotesOpen(false);
     setIsUserManagementOpen(false);
     setPublishNotice(null);
+    setLessonToast(null);
     setWordSelection(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleDeleteCustomLesson = (lessonId: string) => {
+  const handleDeleteCustomLesson = async (lessonId: string) => {
+    const target = customLessons.find((l) => l.id === lessonId);
+    if (target && !canUserDeleteLesson(target, currentUser, resolvedCloudUserId)) {
+      return;
+    }
     setCustomLessons((prev) => prev.filter((l) => l.id !== lessonId));
     if (activeLessonId === lessonId) {
       setActiveLessonId(null);
+    }
+    if (isSupabaseConfigured()) {
+      const res = await deleteLessonFromCloudWithResult(lessonId);
+      if (!res.ok) {
+        console.error('[Qalam Lessons] Failed to delete lesson from Supabase:', res.error);
+        showLessonToast(false, `Removed locally, but Supabase delete failed: ${res.error || 'Unknown error'}`);
+      } else {
+        showLessonToast(true, 'Lesson deleted from Supabase.');
+      }
+    }
+  };
+
+  const handleApproveDraft = async (lessonId: string) => {
+    if (!isAdminUser(currentUser)) return;
+    let approvedLesson: Lesson | null = null;
+    setCustomLessons((prev) =>
+      prev.map((lesson) => {
+        if (lesson.id !== lessonId) return lesson;
+        approvedLesson = {
+          ...lesson,
+          status: 'published',
+          isPublic: true,
+        };
+        return approvedLesson;
+      })
+    );
+    if (approvedLesson && isSupabaseConfigured()) {
+      const res = await upsertLessonToCloudWithResult(currentUser, approvedLesson);
+      if (!res.ok) {
+        console.error('[Qalam Lessons] Failed to publish draft to Supabase:', res.error);
+        showLessonToast(false, `Approved locally, but Supabase publish failed: ${res.error || 'Unknown error'}`);
+      } else {
+        showLessonToast(true, 'Draft approved and published publicly to Supabase.');
+      }
+    }
+  };
+
+  const handleEditDraft = async (updatedLesson: Lesson) => {
+    if (!isAdminUser(currentUser)) return;
+    const normalized: Lesson = {
+      ...updatedLesson,
+      isPublic: updatedLesson.status === 'published' ? true : false,
+    };
+    setCustomLessons((prev) =>
+      prev.map((lesson) => (lesson.id === normalized.id ? normalized : lesson))
+    );
+    if (isSupabaseConfigured()) {
+      const res = await upsertLessonToCloudWithResult(currentUser, normalized);
+      if (!res.ok) {
+        console.error('[Qalam Lessons] Failed to update draft in Supabase:', res.error);
+        showLessonToast(false, `Updated locally, but Supabase save failed: ${res.error || 'Unknown error'}`);
+      } else {
+        showLessonToast(true, 'Draft changes saved to Supabase.');
+      }
+    }
+  };
+
+  const handleDeleteDraft = async (lessonId: string) => {
+    if (!isAdminUser(currentUser)) return;
+    setCustomLessons((prev) => prev.filter((lesson) => lesson.id !== lessonId));
+    if (isSupabaseConfigured()) {
+      const res = await deleteLessonFromCloudWithResult(lessonId);
+      if (!res.ok) {
+        console.error('[Qalam Lessons] Failed to delete draft from Supabase:', res.error);
+        showLessonToast(false, `Deleted locally, but Supabase delete failed: ${res.error || 'Unknown error'}`);
+      }
+    }
+  };
+
+  const handleGenerateDailyDrafts = async () => {
+    if (!isAdminUser(currentUser) || generatingDailyDrafts) return;
+    setGeneratingDailyDrafts(true);
+    setDailyCurriculumNotice(null);
+    try {
+      const result = await runDailyCurriculumAgent({
+        existingLessons: customLessons,
+        currentUser,
+        force: true,
+      });
+
+      if (result.addedLessons.length > 0) {
+        setCustomLessons((prev) => {
+          const existingIds = new Set(prev.map((l) => l.id));
+          const fresh = result.addedLessons.filter((l) => !existingIds.has(l.id));
+          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+        });
+        setDailyCurriculumNotice(
+          `Generated ${result.addedLessons.length} curated draft lesson(s) for ${result.date}${
+            result.modelUsed ? ` via ${result.modelUsed}` : ''
+          }. Review & approve below to publish to students.`
+        );
+      } else {
+        setDailyCurriculumNotice(
+          result.notice ||
+            `All 12 curated daily lessons for ${result.date} (4 per level) already exist.`
+        );
+      }
+    } catch (err) {
+      setDailyCurriculumNotice(
+        err instanceof Error ? err.message : 'Failed to generate daily curriculum drafts.'
+      );
+    } finally {
+      setGeneratingDailyDrafts(false);
     }
   };
 
@@ -1366,41 +1672,119 @@ export default function App() {
   );
 
   const handleSaveNote = useCallback(
-    (input: { id?: string; title?: string; body: string; context?: NoteContextTag }) => {
+    async (input: {
+      id?: string;
+      title?: string;
+      body: string;
+      context?: NoteContextTag;
+    }): Promise<SaveNoteResult> => {
+      const trimmedBody = (input.body ?? '').trim();
+      const trimmedTitle = (input.title ?? '').trim();
+
+      if (!trimmedBody) {
+        const message = 'Please write your note before saving · يرجى كتابة الملاحظة قبل الحفظ.';
+        console.warn('[Qalam Notes] Note save rejected: empty body.');
+        return { ok: false, error: message };
+      }
+
+      if (!currentUser) {
+        const message = 'Please sign in before saving notes · يرجى تسجيل الدخول قبل حفظ الملاحظات.';
+        console.warn('[Qalam Notes] Note save rejected: no active user.');
+        return { ok: false, error: message };
+      }
+
       const now = Date.now();
-      setStudyNotes((prev) => {
-        if (input.id) {
-          return prev.map((note) =>
-            note.id === input.id
-              ? {
-                  ...note,
-                  title: input.title,
-                  body: input.body,
-                  context: input.context,
-                  updatedAt: now,
-                }
-              : note
-          );
+      const existingNote = input.id
+        ? studyNotes.find((note) => note.id === input.id)
+        : undefined;
+
+      const targetNote: StudyNote = existingNote
+        ? {
+            ...existingNote,
+            title: trimmedTitle || undefined,
+            body: trimmedBody,
+            context: input.context,
+            updatedAt: now,
+          }
+        : {
+            id: input.id || `note-${now}-${Math.random().toString(36).slice(2, 7)}`,
+            title: trimmedTitle || undefined,
+            body: trimmedBody,
+            context: input.context,
+            createdAt: now,
+            updatedAt: now,
+          };
+
+      if (!currentUser.isGuest && isSupabaseConfigured()) {
+        const cloudResult = await upsertStudyNoteToCloud(currentUser, targetNote);
+        if (!cloudResult.ok) {
+          const message =
+            cloudResult.error ||
+            'Failed to save note to Supabase · تعذر حفظ الملاحظة في قاعدة البيانات.';
+          console.error('[Qalam Notes] Supabase save failed:', {
+            noteId: targetNote.id,
+            userId: currentUser.id,
+            error: message,
+          });
+          return { ok: false, syncedToCloud: false, error: message };
         }
-        const nextNote: StudyNote = {
-          id: `note-${now}-${Math.random().toString(36).slice(2, 7)}`,
-          title: input.title,
-          body: input.body,
-          context: input.context,
-          createdAt: now,
-          updatedAt: now,
-        };
-        return [nextNote, ...prev];
+      }
+
+      skipNextNotesAutoSyncRef.current = true;
+      setStudyNotes((prev) => {
+        if (input.id && prev.some((n) => n.id === input.id)) {
+          return prev.map((note) => (note.id === input.id ? targetNote : note));
+        }
+        return [targetNote, ...prev];
       });
+
+      if (currentUser.isGuest) {
+        return {
+          ok: true,
+          syncedToCloud: false,
+          message: 'Saved locally (Guest mode) · تم الحفظ محليًا',
+        };
+      }
+
+      if (!isSupabaseConfigured()) {
+        return {
+          ok: true,
+          syncedToCloud: false,
+          message: 'Saved locally (Supabase not configured) · تم الحفظ محليًا',
+        };
+      }
+
+      return {
+        ok: true,
+        syncedToCloud: true,
+        message: 'Saved to cloud · تم الحفظ في السحابة',
+      };
     },
-    [setStudyNotes]
+    [currentUser, studyNotes, setStudyNotes]
   );
 
   const handleDeleteNote = useCallback(
-    (id: string) => {
+    async (id: string): Promise<SaveNoteResult> => {
+      if (currentUser && !currentUser.isGuest && isSupabaseConfigured()) {
+        const cloudResult = await deleteStudyNoteFromCloud(currentUser, id);
+        if (!cloudResult.ok) {
+          const message =
+            cloudResult.error ||
+            'Failed to delete note from Supabase · تعذر حذف الملاحظة.';
+          console.error('[Qalam Notes] Supabase delete failed:', {
+            noteId: id,
+            userId: currentUser.id,
+            error: message,
+          });
+          return { ok: false, error: message };
+        }
+      }
+
+      skipNextNotesAutoSyncRef.current = true;
       setStudyNotes((prev) => prev.filter((note) => note.id !== id));
+      return { ok: true };
     },
-    [setStudyNotes]
+    [currentUser, setStudyNotes]
   );
 
   const completedLessonsCount = useMemo(
@@ -1423,6 +1807,10 @@ export default function App() {
       <Navbar
         activeTab={activeTab}
         activeNavSection={activeNavSection}
+        selectedLevel={selectedLevel}
+        onSelectLevel={handleSelectLevel}
+        levelCounts={levelCounts}
+        pendingDraftsCount={pendingDraftLessons.length}
         onSelectHome={handleSelectHome}
         onSelectHistory={() => handleSelectTab('history')}
         onSelectLevels={handleSelectLevelsNav}
@@ -1585,7 +1973,10 @@ export default function App() {
                           activeHeroSwitch === 'levels' ? 'is-active' : ''
                         }`}
                       >
-                        <span>Explore Levels</span>
+                        <span>{levelInfo.en} Lessons</span>
+                        <span dir="rtl" lang="ar" className="font-arabic-cairo text-xs">
+                          ({levelInfo.ar})
+                        </span>
                         <ArrowDown
                           className={`h-3.5 w-3.5 transition-colors duration-[180ms] ${
                             activeHeroSwitch === 'levels' ? 'text-[#1F2718]' : 'text-[#FACC15]'
@@ -1699,164 +2090,12 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* Cohesive Olive & Gold Proficiency Level Cards */}
+                {/* Filtered Lessons List (repeated in-page level cards hidden; level switched cleanly from sticky top bar under الدروس) */}
                 <section
-                  id="levels-section"
+                  id="lessons-list-section"
                   ref={levelsSectionRef}
-                  aria-label="Select proficiency level"
-                  className="scroll-mt-20 space-y-4 animate-fade-slide-up animate-delay-75"
+                  className="scroll-mt-20 space-y-5 animate-fade-slide-up animate-delay-150"
                 >
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <div className="flex items-baseline gap-2.5">
-                      <h2 className="font-display text-xl sm:text-2xl font-bold text-[#1F2718]">
-                        Choose Your Level
-                      </h2>
-                      <span
-                        dir="rtl"
-                        lang="ar"
-                        className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22]"
-                      >
-                        المستويات
-                      </span>
-                    </div>
-                    <span className="text-xs text-[#5A6552]">
-                      Select a track to filter reading passages
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-                    {([
-                      {
-                        level: 'beginner' as ProficiencyLevel,
-                        Icon: Sprout,
-                        cardBg: 'from-[#FAFBF8] via-white to-[#EEF2E9]/70',
-                        glowOrb: 'bg-[#DCE5D3]/50',
-                        activeBorder:
-                          'border-[#3B4D2B] ring-2 ring-[#D4A338]/40 shadow-md',
-                        idleBorder:
-                          'border-[#DCE5D3] hover:border-[#3E522D]/60 hover:shadow-sm',
-                        iconBox:
-                          'bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]',
-                        activeIconBox:
-                          'bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#E8B948] ring-4 ring-[#DCE5D3]',
-                        titleColor: 'text-[#1F2718]',
-                        accentText: 'text-[#2D3B22]',
-                      },
-                      {
-                        level: 'intermediate' as ProficiencyLevel,
-                        Icon: Compass,
-                        cardBg: 'from-[#FAFBF8] via-white to-[#FBF3DC]/50',
-                        glowOrb: 'bg-[#FBF3DC]/60',
-                        activeBorder:
-                          'border-[#3B4D2B] ring-2 ring-[#D4A338]/40 shadow-md',
-                        idleBorder:
-                          'border-[#DCE5D3] hover:border-[#D4A338]/70 hover:shadow-sm',
-                        iconBox:
-                          'bg-[#FBF3DC] text-[#9A6F14] border border-[#E8B948]/50',
-                        activeIconBox:
-                          'bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#E8B948] ring-4 ring-[#FBF3DC]',
-                        titleColor: 'text-[#1F2718]',
-                        accentText: 'text-[#9A6F14]',
-                      },
-                      {
-                        level: 'advanced' as ProficiencyLevel,
-                        Icon: Crown,
-                        cardBg: 'from-[#FAFBF8] via-white to-[#EEF2E9]/85',
-                        glowOrb: 'bg-[#3E522D]/15',
-                        activeBorder:
-                          'border-[#2D3B22] ring-2 ring-[#D4A338]/45 shadow-md',
-                        idleBorder:
-                          'border-[#DCE5D3] hover:border-[#2D3B22]/60 hover:shadow-sm',
-                        iconBox:
-                          'bg-[#EEF2E9] text-[#2D3B22] border border-[#DCE5D3]',
-                        activeIconBox:
-                          'bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#E8B948] ring-4 ring-[#DCE5D3]',
-                        titleColor: 'text-[#1F2718]',
-                        accentText: 'text-[#2D3B22]',
-                      },
-                    ]).map((cfg) => {
-                      const meta = LEVEL_LABELS[cfg.level];
-                      const active = selectedLevel === cfg.level;
-                      const count = allLessons.filter((l) => l.level === cfg.level).length;
-                      const IconComponent = cfg.Icon;
-
-                      return (
-                        <button
-                          key={cfg.level}
-                          type="button"
-                          onClick={() => handleSelectLevel(cfg.level)}
-                          aria-pressed={active}
-                          className={`group relative overflow-hidden flex flex-col justify-between rounded-2xl border bg-gradient-to-br ${cfg.cardBg} p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-1 active:scale-[0.99] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4A338] ${
-                            active ? cfg.activeBorder : cfg.idleBorder
-                          }`}
-                        >
-                          <div
-                            className={`pointer-events-none -right-8 -top-8 absolute h-28 w-28 rounded-full ${cfg.glowOrb} blur-2xl transition-opacity duration-200 group-hover:opacity-100 opacity-70`}
-                          />
-
-                          <div className="relative flex items-start justify-between gap-3 w-full">
-                            <div
-                              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl shadow-sm transition-transform duration-200 group-hover:scale-105 ${
-                                active ? cfg.activeIconBox : cfg.iconBox
-                              }`}
-                            >
-                              <IconComponent className="h-5 w-5" aria-hidden="true" />
-                            </div>
-
-                            <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
-                              <span className={`font-semibold ${cfg.accentText}`}>
-                                {count} {count === 1 ? 'Lesson' : 'Lessons'}
-                              </span>
-                              {active && (
-                                <CheckCircle2
-                                  className="h-4 w-4 text-[#D4A338]"
-                                  aria-label="Selected"
-                                />
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="relative mt-5 space-y-2 w-full">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <h3 className={`font-display text-xl font-bold ${cfg.titleColor}`}>
-                                {meta.en}
-                              </h3>
-                              <span
-                                dir="rtl"
-                                lang="ar"
-                                className={`font-arabic-scheherazade text-2xl font-bold ${cfg.accentText}`}
-                              >
-                                {meta.ar}
-                              </span>
-                            </div>
-                            <p
-                              dir="rtl"
-                              lang="ar"
-                              className="font-arabic-scheherazade text-lg text-[#3F4A37] leading-relaxed text-right"
-                            >
-                              {meta.summaryAr}
-                            </p>
-                          </div>
-
-                          <div className="relative mt-4 pt-3 border-t border-[#DCE5D3]/80 flex items-center justify-between w-full text-xs font-semibold">
-                            <span className={active ? 'text-[#2D3B22] font-bold' : 'text-[#5A6552]'}>
-                              {active ? 'Active Track' : 'Select Level'}
-                            </span>
-                            <ArrowRight
-                              className={`h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-1 ${
-                                active ? 'text-[#D4A338]' : 'text-[#6B7861]'
-                              }`}
-                              aria-hidden="true"
-                            />
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                {/* Filtered Lessons List */}
-                <section className="space-y-5 animate-fade-slide-up animate-delay-150">
                   <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#DCE5D3] pb-3">
                     <div className="flex items-baseline gap-3">
                       <h2 className="font-display text-2xl font-bold text-[#1F2718]">
@@ -1962,7 +2201,7 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {lesson.isCustom && (
+                              {canUserDeleteLesson(lesson, currentUser, resolvedCloudUserId) && (
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteCustomLesson(lesson.id)}
@@ -2010,10 +2249,25 @@ export default function App() {
                           </div>
 
                           <div className="mt-6 pt-4 border-t border-[#EEF2E9] flex items-center justify-between gap-2">
-                            <span className="text-xs font-medium text-[#5A6552] truncate">
-                              {lesson.isCustom
-                                ? `Uploaded by ${lesson.authorName || 'Contributor'}`
-                                : 'Curated Reading'}
+                            <span className="inline-flex items-center gap-2 text-xs font-medium text-[#5A6552] truncate">
+                              <span>
+                                {lesson.isDailyCurriculum
+                                  ? 'Daily Curated Lesson'
+                                  : lesson.isCustom
+                                    ? `Uploaded by ${lesson.authorName || 'Contributor'}`
+                                    : 'Curated Reading'}
+                              </span>
+                              {lesson.isCustom && (
+                                <span
+                                  className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                                    lesson.isPublic
+                                      ? 'bg-[#EEF2E9] text-[#2D3B22]'
+                                      : 'bg-[#FBF3DC] text-[#7A560B]'
+                                  }`}
+                                >
+                                  {lesson.isPublic ? 'Public' : 'Private'}
+                                </span>
+                              )}
                             </span>
                             <button
                               type="button"
@@ -2209,12 +2463,16 @@ export default function App() {
             <VocabularyView
               cards={vocabCards}
               speechRate={preferences.speechRate}
+              currentUser={currentUser}
+              analysisCache={analysisCache}
               initialScope={practiceScopeRequest.scope}
               scopeRequestSeq={practiceScopeRequest.seq}
               onUpdateStatus={handleUpdateVocabStatus}
               onToggleDifficult={handleToggleDifficultCard}
               onRateSrs={handleRateVocabCard}
               onEditCard={handleEditVocabCard}
+              onCardsRepaired={setVocabCards}
+              onAnalysisCacheRepaired={setAnalysisCache}
               onDeleteCard={handleDeleteVocabCard}
               onGoToLessons={() => handleSelectTab('lessons')}
               onRecordReview={() => recordStudyActivity('reviewed')}
@@ -2309,6 +2567,13 @@ export default function App() {
               currentUser={currentUser}
               vocabCards={vocabCards}
               analysisCache={analysisCache}
+              pendingDrafts={pendingDraftLessons}
+              onApproveDraft={handleApproveDraft}
+              onEditDraft={handleEditDraft}
+              onDeleteDraft={handleDeleteDraft}
+              onGenerateDailyDrafts={handleGenerateDailyDrafts}
+              generatingDailyDrafts={generatingDailyDrafts}
+              dailyCurriculumNotice={dailyCurriculumNotice}
               onVocabRepaired={setVocabCards}
               onAnalysisCacheRepaired={setAnalysisCache}
               onClose={() => setIsUserManagementOpen(false)}
@@ -2326,6 +2591,35 @@ export default function App() {
             onSaveNote={handleSaveNote}
             onDeleteNote={handleDeleteNote}
           />
+
+          {lessonToast && (
+            <div
+              role={lessonToast.ok ? 'status' : 'alert'}
+              aria-live="polite"
+              className={`animate-fade-slide-up fixed top-20 right-4 sm:right-6 z-50 flex max-w-sm items-start gap-2.5 rounded-2xl border px-4 py-3 text-xs shadow-xl backdrop-blur-md ${
+                lessonToast.ok
+                  ? 'border-[#FACC15]/60 bg-[#2D3B22]/95 text-[#FAFBF8]'
+                  : 'border-rose-400/70 bg-[#451A1A]/95 text-rose-50'
+              }`}
+            >
+              {lessonToast.ok ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#FACC15]" aria-hidden="true" />
+              ) : (
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" aria-hidden="true" />
+              )}
+              <span dir="auto" className="leading-relaxed">
+                {lessonToast.message}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLessonToast(null)}
+                aria-label="Dismiss lesson notification"
+                className="ml-1 rounded-md p-0.5 text-white/75 hover:bg-white/10 hover:text-white cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          )}
 
           {audioToast && (
             <div

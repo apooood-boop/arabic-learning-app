@@ -157,12 +157,30 @@ CREATE TABLE IF NOT EXISTS public.user_progress (
 );
 
 -- ==============================================================================
--- 7. Row Level Security (RLS) Configuration
+-- 7. Table: lessons (Public admin/moderator/daily lessons & private student lessons)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.lessons (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  level TEXT NOT NULL CHECK (level IN ('beginner', 'intermediate', 'advanced')),
+  is_public BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'draft')),
+  author_id TEXT REFERENCES public.profiles(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_lessons_public_level ON public.lessons(is_public, status, level);
+CREATE INDEX IF NOT EXISTS idx_lessons_author_id ON public.lessons(author_id);
+
+-- ==============================================================================
+-- 8. Row Level Security (RLS) Configuration
 -- ==============================================================================
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vocabulary_cards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.study_notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.lessons ENABLE ROW LEVEL SECURITY;
 
 -- Helper to safely get the current request user identifier
 -- Supports both Supabase Auth JWT (auth.uid()) and custom client headers
@@ -296,7 +314,84 @@ WITH CHECK (
   OR auth.role() = 'anon'
 );
 
+-- ------------------------------------------------------------------------------
+-- RLS Policies: lessons
+-- ------------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Public published lessons readable by all, private by owner, drafts by admin" ON public.lessons;
+CREATE POLICY "Public published lessons readable by all, private by owner, drafts by admin"
+ON public.lessons FOR SELECT
+USING (
+  (is_public = TRUE AND status = 'published')
+  OR author_id = public.current_app_user_id()
+  OR public.is_admin_user()
+  OR auth.role() = 'anon'
+);
+
+DROP POLICY IF EXISTS "Users can insert own or public lessons" ON public.lessons;
+CREATE POLICY "Users can insert own or public lessons"
+ON public.lessons FOR INSERT
+WITH CHECK (
+  author_id = public.current_app_user_id()
+  OR public.is_admin_user()
+  OR auth.role() = 'anon'
+);
+
+DROP POLICY IF EXISTS "Owners and admins can update lessons" ON public.lessons;
+CREATE POLICY "Owners and admins can update lessons"
+ON public.lessons FOR UPDATE
+USING (
+  author_id = public.current_app_user_id()
+  OR public.is_admin_user()
+  OR auth.role() = 'anon'
+);
+
+DROP POLICY IF EXISTS "Owners and admins can delete lessons" ON public.lessons;
+CREATE POLICY "Owners and admins can delete lessons"
+ON public.lessons FOR DELETE
+USING (
+  author_id = public.current_app_user_id()
+  OR public.is_admin_user()
+  OR auth.role() = 'anon'
+);
+
 -- ==============================================================================
 -- Schema setup complete. All tables and RLS policies are active.
 -- ==============================================================================
+`;
+
+export const LESSONS_RLS_FIX_SQL = `-- Run this in Supabase SQL Editor to allow Qalam to save/publish/delete in public.lessons
+ALTER TABLE public.lessons ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public published lessons readable by all, private by owner, drafts by admin" ON public.lessons;
+CREATE POLICY "Public published lessons readable by all, private by owner, drafts by admin"
+ON public.lessons FOR SELECT
+USING (
+  (is_public = TRUE AND status = 'published')
+  OR author_id::text = COALESCE(auth.uid()::text, current_setting('request.headers', true)::jsonb->>'x-user-id')
+  OR auth.role() IN ('anon', 'authenticated')
+);
+
+DROP POLICY IF EXISTS "Users can insert own or public lessons" ON public.lessons;
+CREATE POLICY "Users can insert own or public lessons"
+ON public.lessons FOR INSERT
+WITH CHECK (
+  author_id::text = COALESCE(auth.uid()::text, current_setting('request.headers', true)::jsonb->>'x-user-id')
+  OR auth.role() IN ('anon', 'authenticated')
+);
+
+DROP POLICY IF EXISTS "Owners and admins can update lessons" ON public.lessons;
+CREATE POLICY "Owners and admins can update lessons"
+ON public.lessons FOR UPDATE
+USING (
+  author_id::text = COALESCE(auth.uid()::text, current_setting('request.headers', true)::jsonb->>'x-user-id')
+  OR auth.role() IN ('anon', 'authenticated')
+);
+
+DROP POLICY IF EXISTS "Owners and admins can delete lessons" ON public.lessons;
+CREATE POLICY "Owners and admins can delete lessons"
+ON public.lessons FOR DELETE
+USING (
+  author_id::text = COALESCE(auth.uid()::text, current_setting('request.headers', true)::jsonb->>'x-user-id')
+  OR auth.role() IN ('anon', 'authenticated')
+);
 `;

@@ -64,7 +64,7 @@ input,
 }
 
 .touch-card-surface {
-  touch-action: manipulation;
+  touch-action: pan-y;
   -webkit-tap-highlight-color: transparent;
 }
 

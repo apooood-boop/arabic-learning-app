@@ -13,6 +13,7 @@ import { generateFallbackLessonQuiz } from './src/data/lessonQuizzes.ts';
 import type {
   GeneratedConversation,
   GeneratedExam,
+  Lesson,
   LessonQuizQuestion,
   LessonQuizResponse,
   ProficiencyLevel,
@@ -30,6 +31,17 @@ import {
   stripFinalIrabForSpeech,
   stripTashkeel,
 } from './src/utils/arabic.ts';
+import {
+  buildDailyCurriculumDraftLesson,
+  buildDailyCurriculumPrompt,
+  buildExistingTopicSet,
+  CURRICULUM_LEVELS,
+  CurriculumLessonSeed,
+  DAILY_CURRICULUM_QUOTA_PER_LEVEL,
+  isTopicDuplicate,
+  registerSeenTopic,
+  selectFallbackSeedsForLevel,
+} from './src/data/dailyCurriculumBank.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2103,6 +2115,257 @@ const SERVER_TEXT_MODEL_FALLBACK_ORDER = [
   'gemini-3.8-flash',
 ];
 const serverUnavailableGeminiModels = new Set<string>();
+const dailyCurriculumMemoryCache = new Map<
+  string,
+  { date: string; lessons: Lesson[]; source: 'gemini' | 'curated-fallback'; modelUsed?: string }
+>();
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientUpstreamStatus(status: number, bodyText: string): boolean {
+  return (
+    status === 503 ||
+    status === 429 ||
+    /"status"\s*:\s*"UNAVAILABLE"/i.test(bodyText) ||
+    /"code"\s*:\s*503/.test(bodyText)
+  );
+}
+
+function getTodayUtcOrLocalDateKey(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+app.get('/api/curriculum/daily', (req, res) => {
+  const dateKey =
+    typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date
+      : getTodayUtcOrLocalDateKey();
+  const cached = dailyCurriculumMemoryCache.get(dateKey);
+  return res.json({
+    ok: true,
+    date: dateKey,
+    quotaPerLevel: DAILY_CURRICULUM_QUOTA_PER_LEVEL,
+    dailyTotal: DAILY_CURRICULUM_QUOTA_PER_LEVEL * CURRICULUM_LEVELS.length,
+    cachedCount: cached?.lessons.length ?? 0,
+    lessons: cached?.lessons ?? [],
+    source: cached?.source ?? 'pending',
+    modelUsed: cached?.modelUsed,
+  });
+});
+
+app.post('/api/curriculum/daily', async (req, res) => {
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+    date?: string;
+    missingCounts?: Partial<Record<ProficiencyLevel, number>>;
+    existingTopics?: string[];
+    apiKey?: string;
+  };
+
+  const dateKey =
+    typeof body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
+      ? body.date
+      : getTodayUtcOrLocalDateKey();
+
+  const missingCounts: Record<ProficiencyLevel, number> = {
+    beginner: Math.min(
+      DAILY_CURRICULUM_QUOTA_PER_LEVEL,
+      Math.max(0, Number(body.missingCounts?.beginner ?? DAILY_CURRICULUM_QUOTA_PER_LEVEL))
+    ),
+    intermediate: Math.min(
+      DAILY_CURRICULUM_QUOTA_PER_LEVEL,
+      Math.max(0, Number(body.missingCounts?.intermediate ?? DAILY_CURRICULUM_QUOTA_PER_LEVEL))
+    ),
+    advanced: Math.min(
+      DAILY_CURRICULUM_QUOTA_PER_LEVEL,
+      Math.max(0, Number(body.missingCounts?.advanced ?? DAILY_CURRICULUM_QUOTA_PER_LEVEL))
+    ),
+  };
+
+  const existingTopics = Array.isArray(body.existingTopics)
+    ? body.existingTopics.filter((t): t is string => typeof t === 'string')
+    : [];
+  const seenTopics = buildExistingTopicSet(existingTopics);
+
+  const totalRequested =
+    missingCounts.beginner + missingCounts.intermediate + missingCounts.advanced;
+  if (totalRequested === 0) {
+    return res.json({
+      ok: true,
+      date: dateKey,
+      lessons: [],
+      generatedCount: 0,
+      source: 'gemini',
+    });
+  }
+
+  const clientApiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+  const apiKey =
+    clientApiKey && clientApiKey !== 'MY_GEMINI_API_KEY'
+      ? clientApiKey
+      : getConfiguredApiKey();
+
+  const generatedLessons: Lesson[] = [];
+  const filledCounts: Record<ProficiencyLevel, number> = {
+    beginner: 0,
+    intermediate: 0,
+    advanced: 0,
+  };
+
+  let source: 'gemini' | 'curated-fallback' = 'curated-fallback';
+  let modelUsed: string | undefined;
+  let notice: string | undefined;
+
+  if (apiKey) {
+    const prompt = buildDailyCurriculumPrompt(dateKey, missingCounts, existingTopics);
+    const modelsToTry = SERVER_TEXT_MODEL_FALLBACK_ORDER.filter(
+      (m) => clientApiKey || !serverUnavailableGeminiModels.has(m)
+    );
+    const activeModels =
+      modelsToTry.length > 0 ? modelsToTry : ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite'];
+
+    const isOAuthToken = apiKey.startsWith('ya29.');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'aistudio-build',
+    };
+    if (isOAuthToken) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    } else {
+      headers['x-goog-api-key'] = apiKey;
+    }
+
+    const payload = {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 8192,
+        responseMimeType: 'application/json',
+      },
+    };
+
+    for (const modelName of activeModels) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`;
+      let succeeded = false;
+
+      // Retry transient 503/UNAVAILABLE errors cleanly with short exponential backoff before switching models
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) {
+          await waitMs(700 * attempt);
+        }
+        try {
+          const upstream = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+          });
+          const rawText = await upstream.text().catch(() => '');
+
+          if (!upstream.ok) {
+            if (upstream.status === 404 && !clientApiKey) {
+              serverUnavailableGeminiModels.add(modelName);
+              break;
+            }
+            if (isTransientUpstreamStatus(upstream.status, rawText)) {
+              continue;
+            }
+            break;
+          }
+
+          const outer = JSON.parse(rawText) as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+          };
+          const innerText = outer?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const cleanedJson = innerText
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim();
+          const parsed = JSON.parse(cleanedJson) as {
+            lessons?: Array<Partial<CurriculumLessonSeed>>;
+          };
+
+          if (Array.isArray(parsed?.lessons)) {
+            for (const rawItem of parsed.lessons) {
+              const lvl = rawItem.level;
+              if (!lvl || !CURRICULUM_LEVELS.includes(lvl)) continue;
+              if (filledCounts[lvl] >= missingCounts[lvl]) continue;
+              if (!rawItem.titleAr || !rawItem.titleEn || !rawItem.textAr) continue;
+
+              const candidateSeed: CurriculumLessonSeed = {
+                level: lvl,
+                topicKey: String(rawItem.topicKey || rawItem.titleEn),
+                titleAr: String(rawItem.titleAr),
+                titleEn: String(rawItem.titleEn),
+                description: String(
+                  rawItem.description || `Curated ${lvl} Arabic reading passage.`
+                ),
+                textAr: String(rawItem.textAr),
+              };
+
+              if (isTopicDuplicate(candidateSeed, seenTopics)) {
+                continue;
+              }
+              registerSeenTopic(candidateSeed, seenTopics);
+              filledCounts[lvl] += 1;
+              generatedLessons.push(
+                buildDailyCurriculumDraftLesson(candidateSeed, dateKey, filledCounts[lvl])
+              );
+            }
+            source = 'gemini';
+            modelUsed = modelName;
+            succeeded = true;
+            break;
+          }
+        } catch (err) {
+          console.warn(`[Daily Curriculum Agent] Attempt ${attempt + 1} failed on ${modelName}:`, err);
+        }
+      }
+
+      if (succeeded) {
+        break;
+      }
+    }
+  } else {
+    notice = 'Gemini API key not configured on server; curated Arabic bank used for today’s drafts.';
+  }
+
+  // Ensure every requested level reaches DAILY_CURRICULUM_QUOTA_PER_LEVEL (4) unique lessons/day even if Gemini skipped a duplicate or returned 503
+  for (const level of CURRICULUM_LEVELS) {
+    const remaining = Math.max(0, missingCounts[level] - filledCounts[level]);
+    if (remaining > 0) {
+      const backupSeeds = selectFallbackSeedsForLevel(level, remaining, seenTopics, dateKey);
+      backupSeeds.forEach((seed) => {
+        filledCounts[level] += 1;
+        generatedLessons.push(
+          buildDailyCurriculumDraftLesson(seed, dateKey, filledCounts[level])
+        );
+      });
+    }
+  }
+
+  dailyCurriculumMemoryCache.set(dateKey, {
+    date: dateKey,
+    lessons: generatedLessons,
+    source,
+    modelUsed,
+  });
+
+  return res.json({
+    ok: true,
+    date: dateKey,
+    lessons: generatedLessons,
+    generatedCount: generatedLessons.length,
+    source,
+    modelUsed,
+    notice,
+  });
+});
 
 // Secure Server-Side Gemini Proxy Route for all client AI calls
 app.post('/api/gemini/generateContent', async (req, res) => {
@@ -2205,6 +2468,105 @@ app.post('/api/gemini/generateContent', async (req, res) => {
     console.error('[Gemini Proxy Server] Error proxying generateContent:', err);
     const errMsg = err instanceof Error ? err.message : String(err);
     return res.status(502).json({ error: { message: errMsg } });
+  }
+});
+
+app.post('/api/lessons/cloud-upsert', async (req, res) => {
+  const supabaseUrl = (
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(501).json({
+      ok: false,
+      notConfigured: true,
+      error: 'SUPABASE_SERVICE_ROLE_KEY is not configured on the server.',
+    });
+  }
+
+  const { rows } = req.body as { rows?: Array<Record<string, unknown>> };
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ ok: false, error: 'Rows array is required.' });
+  }
+
+  try {
+    const response = await fetch(`${supabaseUrl}/rest/v1/lessons?on_conflict=id`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        Prefer: 'resolution=merge-duplicates,return=representation',
+      },
+      body: JSON.stringify(rows),
+    });
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const msg =
+        (data && typeof data === 'object' && 'message' in data && String((data as { message?: string }).message)) ||
+        `Supabase service-role upsert failed (${response.status}).`;
+      return res.status(response.status).json({ ok: false, error: msg });
+    }
+    return res.json({ ok: true, data });
+  } catch (err) {
+    return res.status(502).json({
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to proxy lesson upsert.',
+    });
+  }
+});
+
+app.post('/api/lessons/cloud-delete', async (req, res) => {
+  const supabaseUrl = (
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(501).json({
+      ok: false,
+      notConfigured: true,
+      error: 'SUPABASE_SERVICE_ROLE_KEY is not configured on the server.',
+    });
+  }
+
+  const { lessonId } = req.body as { lessonId?: string };
+  if (!lessonId || typeof lessonId !== 'string') {
+    return res.status(400).json({ ok: false, error: 'lessonId is required.' });
+  }
+
+  try {
+    const response = await fetch(
+      `${supabaseUrl}/rest/v1/lessons?id=eq.${encodeURIComponent(lessonId)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          apikey: serviceKey,
+          Authorization: `Bearer ${serviceKey}`,
+        },
+      }
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      const msg =
+        (data && typeof data === 'object' && 'message' in data && String((data as { message?: string }).message)) ||
+        `Supabase service-role delete failed (${response.status}).`;
+      return res.status(response.status).json({ ok: false, error: msg });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(502).json({
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to proxy lesson delete.',
+    });
   }
 });
 

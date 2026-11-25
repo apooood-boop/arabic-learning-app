@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Activity,
   AlertTriangle,
+  BookOpenText,
   Check,
   CheckCircle2,
   ClipboardCopy,
@@ -14,8 +15,10 @@ import {
   Languages,
   Loader2,
   Lock,
+  Pencil,
   RefreshCw,
   Search,
+  Send,
   Shield,
   ShieldCheck,
   Sparkles,
@@ -29,6 +32,8 @@ import {
 import {
   AdminManagedAccount,
   AuthUser,
+  Lesson,
+  ProficiencyLevel,
   UserRole,
   VocabCard,
   WordAnalysis,
@@ -38,6 +43,7 @@ import {
   pingGeminiApiStatus,
   pingSupabaseApiStatus,
   runAdminHealthCheck,
+  runAdminVocabTranslationRepair,
   runAutoDataAndCacheRepair,
   runFullAdminReScan,
   testAudioPlaybackTool,
@@ -46,8 +52,16 @@ import {
   type AdminHealthSnapshot,
   type AutoRepairReport,
   type LiveToolTestResult,
+  type TranslationRepairProgress,
+  type TranslationRepairSummary,
 } from '../utils/adminDiagnostics';
-import { clearAllArabicAudioCaches, stopArabicSpeech } from '../utils/arabic';
+import { isCardMissingOrPlaceholderTranslation } from '../utils/vocabTranslationRepair';
+import {
+  applySmartPartialTashkeel,
+  clearAllArabicAudioCaches,
+  countArabicWords,
+  stopArabicSpeech,
+} from '../utils/arabic';
 import {
   getGeminiApiKeyInfo,
   setAdminGeminiApiKeyOverride,
@@ -68,20 +82,33 @@ import {
   listAccountsForAdminAsync,
   MIN_PASSWORD_LENGTH,
 } from '../utils/auth';
-import { SUPABASE_SCHEMA_SQL } from '../db/supabaseSchemaString';
+import { LESSONS_RLS_FIX_SQL, SUPABASE_SCHEMA_SQL } from '../db/supabaseSchemaString';
 
 interface UserManagementModalProps {
   isOpen: boolean;
   currentUser: AuthUser | null;
   vocabCards: VocabCard[];
   analysisCache: Record<string, WordAnalysis>;
+  pendingDrafts?: Lesson[];
+  onApproveDraft?: (lessonId: string) => void;
+  onEditDraft?: (updatedLesson: Lesson) => void;
+  onDeleteDraft?: (lessonId: string) => void;
+  onGenerateDailyDrafts?: () => Promise<void>;
+  generatingDailyDrafts?: boolean;
+  dailyCurriculumNotice?: string | null;
   onVocabRepaired: (nextCards: VocabCard[]) => void;
   onAnalysisCacheRepaired: (nextCache: Record<string, WordAnalysis>) => void;
   onClose: () => void;
   onCurrentUserSynced?: (user: AuthUser | null) => void;
 }
 
-type AdminTab = 'users' | 'diagnostics';
+type AdminTab = 'users' | 'drafts' | 'diagnostics';
+
+const DRAFT_LEVEL_LABELS: Record<ProficiencyLevel, { ar: string; en: string }> = {
+  beginner: { ar: 'مبتدئ', en: 'Beginner' },
+  intermediate: { ar: 'متوسط', en: 'Intermediate' },
+  advanced: { ar: 'متقدم', en: 'Advanced' },
+};
 
 const ROLE_LABELS: Record<UserRole, { ar: string; en: string }> = {
   student: { ar: 'طالب', en: 'Student' },
@@ -94,12 +121,27 @@ export function UserManagementModal({
   currentUser,
   vocabCards,
   analysisCache,
+  pendingDrafts = [],
+  onApproveDraft,
+  onEditDraft,
+  onDeleteDraft,
+  onGenerateDailyDrafts,
+  generatingDailyDrafts = false,
+  dailyCurriculumNotice,
   onVocabRepaired,
   onAnalysisCacheRepaired,
   onClose,
   onCurrentUserSynced,
 }: UserManagementModalProps) {
   const [activeAdminTab, setActiveAdminTab] = useState<AdminTab>('users');
+  const [draftLevelFilter, setDraftLevelFilter] = useState<'all' | ProficiencyLevel>('all');
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [draftTitleArInput, setDraftTitleArInput] = useState('');
+  const [draftTitleEnInput, setDraftTitleEnInput] = useState('');
+  const [draftLevelInput, setDraftLevelInput] = useState<ProficiencyLevel>('beginner');
+  const [draftDescriptionInput, setDraftDescriptionInput] = useState('');
+  const [draftTextArInput, setDraftTextArInput] = useState('');
+  const [draftDeleteConfirmId, setDraftDeleteConfirmId] = useState<string | null>(null);
 
   // Users & Roles state
   const [accounts, setAccounts] = useState<AdminManagedAccount[]>([]);
@@ -187,6 +229,11 @@ export function UserManagementModal({
   const [isScanning, setIsScanning] = useState(false);
   const [lastScannedAt, setLastScannedAt] = useState<number | null>(null);
   const [repairReport, setRepairReport] = useState<AutoRepairReport | null>(null);
+  const [repairingTranslations, setRepairingTranslations] = useState(false);
+  const [translationRepairProgress, setTranslationRepairProgress] =
+    useState<TranslationRepairProgress | null>(null);
+  const [translationRepairSummary, setTranslationRepairSummary] =
+    useState<TranslationRepairSummary | null>(null);
   const [testWordInput, setTestWordInput] = useState('المَكْتَبَةِ');
   const [testResults, setTestResults] = useState<LiveToolTestResult[]>([]);
   const [runningTest, setRunningTest] = useState<
@@ -194,6 +241,7 @@ export function UserManagementModal({
   >(null);
   const [copiedReport, setCopiedReport] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedLessonsRlsSql, setCopiedLessonsRlsSql] = useState(false);
   const [showSqlViewer, setShowSqlViewer] = useState(false);
 
   const loadList = async () => {
@@ -252,6 +300,8 @@ export function UserManagementModal({
     setRepairReport(null);
     setCopiedReport(false);
     setIsScanning(false);
+    setEditingDraftId(null);
+    setDraftDeleteConfirmId(null);
     loadList();
     refreshHealth();
     refreshApiKeyInfo();
@@ -280,6 +330,54 @@ export function UserManagementModal({
         ROLE_LABELS[acc.role].ar.includes(q)
     );
   }, [accounts, searchQuery]);
+
+  const filteredDrafts = useMemo(() => {
+    if (draftLevelFilter === 'all') return pendingDrafts;
+    return pendingDrafts.filter((d) => d.level === draftLevelFilter);
+  }, [pendingDrafts, draftLevelFilter]);
+
+  const missingTranslationCount = useMemo(
+    () => vocabCards.filter((c) => isCardMissingOrPlaceholderTranslation(c)).length,
+    [vocabCards]
+  );
+
+  const startEditDraft = (draft: Lesson) => {
+    setDraftDeleteConfirmId(null);
+    setEditingDraftId(draft.id);
+    setDraftTitleArInput(draft.titleAr);
+    setDraftTitleEnInput(draft.titleEn);
+    setDraftLevelInput(draft.level);
+    setDraftDescriptionInput(draft.description);
+    setDraftTextArInput(draft.textAr);
+  };
+
+  const handleSaveEditedDraft = (draft: Lesson, publishImmediately: boolean) => {
+    const cleanTextAr = applySmartPartialTashkeel(draftTextArInput.trim() || draft.textAr);
+    const cleanTitleAr = applySmartPartialTashkeel(draftTitleArInput.trim() || draft.titleAr);
+    const cleanTitleEn = draftTitleEnInput.trim() || draft.titleEn;
+    const cleanDesc = draftDescriptionInput.trim() || draft.description;
+    const words = countArabicWords(cleanTextAr);
+
+    const updated: Lesson = {
+      ...draft,
+      titleAr: cleanTitleAr,
+      titleEn: cleanTitleEn,
+      level: draftLevelInput,
+      description: cleanDesc,
+      textAr: cleanTextAr,
+      readingTimeMinutes: Math.max(1, Math.ceil((words || 45) / 35)),
+      status: publishImmediately ? 'published' : 'draft',
+      isPublic: publishImmediately ? true : false,
+    };
+
+    onEditDraft?.(updated);
+    setEditingDraftId(null);
+    setNotice(
+      publishImmediately
+        ? `تم اعتماد ونشر الدرس «${cleanTitleAr}» للجميع · Approved and published "${cleanTitleEn}".`
+        : `تم تحديث المسودة «${cleanTitleAr}» · Updated draft "${cleanTitleEn}".`
+    );
+  };
 
   // Strictly block rendering for non-admin users (students, moderators, guests, unauthenticated)
   if (!isOpen || !isAdminUser(currentUser)) return null;
@@ -398,11 +496,12 @@ export function UserManagementModal({
       });
       setRepairReport(report);
       // Re-run health check immediately against fresh state
-      const freshHealth = runAdminHealthCheck(currentUser, vocabCards, analysisCache);
+      const freshCards = report.nextVocabCards ?? vocabCards;
+      const freshCache = report.nextAnalysisCache ?? analysisCache;
+      const freshHealth = runAdminHealthCheck(currentUser, freshCards, freshCache);
       const updatedSnap: AdminHealthSnapshot = {
         ...freshHealth,
         wordCachePlaceholders: 0,
-        vocabCardsWithPlaceholders: 0,
         vocabCardsNeedingNormalization: 0,
         geminiText: {
           ...freshHealth.geminiText,
@@ -427,6 +526,34 @@ export function UserManagementModal({
       setLastScannedAt(updatedSnap.checkedAt);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Auto-repair failed.');
+    }
+  };
+
+  const handleRepairMissingTranslations = async () => {
+    if (repairingTranslations) return;
+    setError(null);
+    setRepairingTranslations(true);
+    setTranslationRepairProgress(null);
+    try {
+      const { nextCards, summary } = await runAdminVocabTranslationRepair({
+        actorUser: currentUser,
+        activeVocabCards: vocabCards,
+        analysisCache,
+        onVocabRepaired,
+        onAnalysisCacheRepaired,
+        onProgress: (progress) => setTranslationRepairProgress(progress),
+      });
+      setTranslationRepairSummary(summary);
+      const freshHealth = runAdminHealthCheck(currentUser, nextCards, analysisCache);
+      setHealth(freshHealth);
+      setLastScannedAt(freshHealth.checkedAt);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Missing card translation repair failed.'
+      );
+    } finally {
+      setRepairingTranslations(false);
+      setTranslationRepairProgress(null);
     }
   };
 
@@ -465,6 +592,16 @@ export function UserManagementModal({
     }
   };
 
+  const handleCopyLessonsRlsSql = async () => {
+    try {
+      await navigator.clipboard.writeText(LESSONS_RLS_FIX_SQL);
+      setCopiedLessonsRlsSql(true);
+      window.setTimeout(() => setCopiedLessonsRlsSql(false), 2500);
+    } catch {
+      setError('Could not copy lessons RLS SQL to clipboard.');
+    }
+  };
+
   const handleRunTranslationTest = async () => {
     setRunningTest('translation');
     try {
@@ -500,6 +637,7 @@ export function UserManagementModal({
     const text = formatDiagnosticReportText({
       health: snap,
       repair: repairReport,
+      translationRepair: translationRepairSummary,
       testResults,
     });
     try {
@@ -574,6 +712,35 @@ export function UserManagementModal({
               </span>
               <span className="rounded-full bg-[#EEF2E9] px-2 py-0.5 font-mono text-[10px] text-[#2D3B22]">
                 {accounts.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeAdminTab === 'drafts'}
+              onClick={() => setActiveAdminTab('drafts')}
+              className={`inline-flex items-center gap-2 rounded-t-xl border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors cursor-pointer ${
+                activeAdminTab === 'drafts'
+                  ? 'border-[#FACC15] bg-[#FAFBF8] text-[#2D3B22]'
+                  : 'border-transparent text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              <BookOpenText className="h-4 w-4 text-[#D4A338]" aria-hidden="true" />
+              <span dir="rtl" lang="ar" className="font-arabic-cairo">
+                المسودات المعلقة
+              </span>
+              <span className="hidden sm:inline text-[11px] font-semibold opacity-80">
+                Pending Drafts
+              </span>
+              <span
+                className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] font-bold tabular-nums ${
+                  pendingDrafts.length > 0
+                    ? 'bg-[#2D3B22] text-[#FACC15]'
+                    : 'bg-[#EEF2E9] text-[#5A6552]'
+                }`}
+              >
+                {pendingDrafts.length}
               </span>
             </button>
 
@@ -916,7 +1083,331 @@ export function UserManagementModal({
           </>
         )}
 
-        {/* TAB 2: Smart Diagnostics, Data Repair & Live Tool Tester */}
+        {/* TAB 2: Pending Drafts Review Queue (Daily Curriculum Agent) */}
+        {activeAdminTab === 'drafts' && (
+          <>
+            <div className="border-b border-[#DCE5D3] bg-white px-5 sm:px-6 py-3.5 shrink-0 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-[#1F2718] flex items-center gap-2">
+                    <BookOpenText className="h-4 w-4 text-[#D4A338]" aria-hidden="true" />
+                    <span>Pending Drafts Review · مراجعة مسودات المناهج اليومية</span>
+                  </h3>
+                  <p className="text-[11px] text-[#5A6552] mt-0.5">
+                    Daily Curriculum Agent generates 4 drafts per level (12/day) saved privately until you approve &amp; publish.
+                  </p>
+                </div>
+
+                {onGenerateDailyDrafts && (
+                  <button
+                    type="button"
+                    disabled={generatingDailyDrafts}
+                    onClick={() => void onGenerateDailyDrafts()}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-3.5 py-2 text-xs font-bold text-white hover:brightness-110 disabled:opacity-60 shadow-xs cursor-pointer whitespace-nowrap"
+                  >
+                    {generatingDailyDrafts ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#FACC15]" aria-hidden="true" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                    )}
+                    <span>
+                      {generatingDailyDrafts
+                        ? 'جاري توليد المسودات...'
+                        : 'توليد مسودات اليوم · Generate Today’s Drafts'}
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              {dailyCurriculumNotice && (
+                <div className="rounded-xl border border-[#3B4D2B]/30 bg-[#EEF2E9] px-3.5 py-2 text-xs font-medium text-[#2D3B22]">
+                  {dailyCurriculumNotice}
+                </div>
+              )}
+
+              {/* Level filter segmented bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] p-1">
+                  {(
+                    [
+                      { key: 'all', label: `All (${pendingDrafts.length})` },
+                      {
+                        key: 'beginner',
+                        label: `مبتدئ · Beginner (${pendingDrafts.filter((d) => d.level === 'beginner').length})`,
+                      },
+                      {
+                        key: 'intermediate',
+                        label: `متوسط · Intermediate (${pendingDrafts.filter((d) => d.level === 'intermediate').length})`,
+                      },
+                      {
+                        key: 'advanced',
+                        label: `متقدم · Advanced (${pendingDrafts.filter((d) => d.level === 'advanced').length})`,
+                      },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setDraftLevelFilter(item.key)}
+                      className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                        draftLevelFilter === item.key
+                          ? 'bg-[#2D3B22] text-[#FACC15] shadow-2xs'
+                          : 'text-[#5A6552] hover:text-[#1F2718]'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-4">
+              {filteredDrafts.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-[#DCE5D3] bg-white p-8 text-center space-y-2">
+                  <CheckCircle2 className="mx-auto h-7 w-7 text-[#3B4D2B]" aria-hidden="true" />
+                  <p className="text-sm font-bold text-[#1F2718]">
+                    لا توجد مسودات معلقة حاليًا · No Pending Drafts
+                  </p>
+                  <p className="text-xs text-[#5A6552] max-w-md mx-auto">
+                    All generated daily lessons have been reviewed, or click &ldquo;Generate Today’s Drafts&rdquo; above to check for today’s 12 curated lessons (4 per level).
+                  </p>
+                </div>
+              ) : (
+                filteredDrafts.map((draft) => {
+                  const isEditing = editingDraftId === draft.id;
+                  const isConfirmingDelete = draftDeleteConfirmId === draft.id;
+                  const lvlMeta = DRAFT_LEVEL_LABELS[draft.level];
+                  const wordCount = countArabicWords(draft.textAr);
+
+                  return (
+                    <article
+                      key={draft.id}
+                      className="rounded-2xl border border-[#DCE5D3] bg-white p-4 sm:p-5 shadow-2xs space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                          <span className="inline-flex items-center gap-1 rounded-md bg-[#2D3B22] px-2.5 py-1 font-bold text-[#FACC15]">
+                            <span dir="rtl" lang="ar" className="font-arabic-cairo">
+                              {lvlMeta.ar}
+                            </span>
+                            <span>· {lvlMeta.en}</span>
+                          </span>
+                          <span className="rounded-md border border-[#E8D7A7] bg-[#FBF3DC] px-2 py-0.5 font-semibold text-[#7A560B]">
+                            Draft · مسودة غير منشورة
+                          </span>
+                          {draft.curriculumDate && (
+                            <span className="font-mono text-[#5A6552]">
+                              {draft.curriculumDate}
+                            </span>
+                          )}
+                          <span className="font-mono text-[#5A6552]">
+                            {wordCount} words
+                          </span>
+                        </div>
+
+                        <span className="text-[11px] text-[#6B7861]">
+                          {draft.authorName || 'Qalam Curriculum Agent'}
+                        </span>
+                      </div>
+
+                      {isEditing ? (
+                        <div className="space-y-3 rounded-xl border border-[#3B4D2B]/30 bg-[#FAFBF8] p-3.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            <div>
+                              <label className="block text-[11px] font-bold text-[#2D3B22] mb-1">
+                                العنوان بالعربية
+                              </label>
+                              <input
+                                type="text"
+                                dir="rtl"
+                                lang="ar"
+                                value={draftTitleArInput}
+                                onChange={(e) => setDraftTitleArInput(e.target.value)}
+                                className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3 py-2 font-arabic-scheherazade text-lg text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold text-[#2D3B22] mb-1">
+                                English Title
+                              </label>
+                              <input
+                                type="text"
+                                value={draftTitleEnInput}
+                                onChange={(e) => setDraftTitleEnInput(e.target.value)}
+                                className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3 py-2 text-xs text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold text-[#2D3B22] mb-1">
+                                Level · المستوى
+                              </label>
+                              <select
+                                value={draftLevelInput}
+                                onChange={(e) =>
+                                  setDraftLevelInput(e.target.value as ProficiencyLevel)
+                                }
+                                className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3 py-2 text-xs font-semibold text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none"
+                              >
+                                <option value="beginner">مبتدئ · Beginner</option>
+                                <option value="intermediate">متوسط · Intermediate</option>
+                                <option value="advanced">متقدم · Advanced</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold text-[#2D3B22] mb-1">
+                              Description
+                            </label>
+                            <input
+                              type="text"
+                              value={draftDescriptionInput}
+                              onChange={(e) => setDraftDescriptionInput(e.target.value)}
+                              className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3 py-2 text-xs text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold text-[#2D3B22] mb-1">
+                              Arabic Content · النص العربي
+                            </label>
+                            <textarea
+                              rows={6}
+                              dir="rtl"
+                              lang="ar"
+                              value={draftTextArInput}
+                              onChange={(e) => setDraftTextArInput(e.target.value)}
+                              className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2.5 font-arabic-scheherazade text-xl leading-[2.1] text-[#1F2718] focus:border-[#3B4D2B] focus:outline-none"
+                            />
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditingDraftId(null)}
+                              className="rounded-xl border border-[#DCE5D3] bg-white px-3 py-1.5 text-xs font-semibold text-[#5A6552] hover:bg-[#EEF2E9] cursor-pointer"
+                            >
+                              إلغاء · Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditedDraft(draft, false)}
+                              className="rounded-xl border border-[#3B4D2B]/40 bg-[#EEF2E9] px-3.5 py-1.5 text-xs font-bold text-[#2D3B22] hover:bg-[#DCE5D3]/80 cursor-pointer"
+                            >
+                              حفظ كمسودة · Save Draft
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditedDraft(draft, true)}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-3.5 py-1.5 text-xs font-bold text-white hover:brightness-110 cursor-pointer"
+                            >
+                              <Send className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                              <span>حفظ ونشر · Save &amp; Publish</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="space-y-1">
+                            <h4
+                              dir="rtl"
+                              lang="ar"
+                              className="font-arabic-scheherazade text-2xl font-bold text-[#2D3B22] text-right leading-[1.7]"
+                            >
+                              {applySmartPartialTashkeel(draft.titleAr)}
+                            </h4>
+                            <p className="text-sm font-bold text-[#1F2718]">{draft.titleEn}</p>
+                            {draft.description && (
+                              <p className="text-xs text-[#5A6552]">{draft.description}</p>
+                            )}
+                          </div>
+
+                          <div
+                            dir="rtl"
+                            lang="ar"
+                            className="rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-4 py-3 font-arabic-scheherazade text-lg sm:text-xl leading-[2.1] text-[#1F2718] whitespace-pre-line max-h-56 overflow-y-auto"
+                          >
+                            {applySmartPartialTashkeel(draft.textAr)}
+                          </div>
+
+                          {isConfirmingDelete && (
+                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs">
+                              <span className="font-semibold text-rose-900">
+                                Delete this draft permanently?
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setDraftDeleteConfirmId(null)}
+                                  className="rounded-lg border border-[#DCE5D3] bg-white px-2.5 py-1 font-semibold text-[#5A6552] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onDeleteDraft?.(draft.id);
+                                    setDraftDeleteConfirmId(null);
+                                    setNotice(`تم حذف المسودة «${draft.titleAr}» · Draft deleted.`);
+                                  }}
+                                  className="rounded-lg bg-rose-700 px-2.5 py-1 font-semibold text-white hover:bg-rose-800 cursor-pointer"
+                                >
+                                  Confirm Delete
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[#EEF2E9] pt-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingDraftId(null);
+                                setDraftDeleteConfirmId((prev) =>
+                                  prev === draft.id ? null : draft.id
+                                );
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>حذف · Delete</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => startEditDraft(draft)}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#FAFBF8] px-3 py-1.5 text-xs font-semibold text-[#2D3B22] hover:bg-[#EEF2E9] cursor-pointer"
+                            >
+                              <Pencil className="h-3.5 w-3.5 text-[#9A6F14]" aria-hidden="true" />
+                              <span>تعديل · Edit</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onApproveDraft?.(draft.id);
+                                setNotice(
+                                  `تم اعتماد ونشر الدرس «${draft.titleAr}» للطلاب · Published "${draft.titleEn}".`
+                                );
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-4 py-1.5 text-xs font-bold text-white hover:brightness-110 shadow-xs cursor-pointer"
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                              <span>اعتماد ونشر · Approve &amp; Publish</span>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </>
+        )}
+
+        {/* TAB 3: Smart Diagnostics, Data Repair & Live Tool Tester */}
         {activeAdminTab === 'diagnostics' && health && (
           <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-5">
             {/* Header Bar with Re-Scan + Last Scanned Timestamp + Copy Report */}
@@ -1188,20 +1679,146 @@ export function UserManagementModal({
                     <span>Automatic Data &amp; Cache Repair · الفحص والإصلاح التلقائي</span>
                   </h4>
                   <p className="mt-0.5 text-[11px] text-[#5A6552]">
-                    Cleans &ldquo;Contextual Arabic word&rdquo; placeholders, normalizes standalone
-                    cards (preserving manual edits), and clears stale audio/translation caches.
+                    Detects missing or placeholder translations (e.g. &ldquo;Translation pending&rdquo;),
+                    fetches live translations via <span className="font-mono">/api/gemini/generateContent</span>,
+                    normalizes cards, and syncs updates to Supabase.
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleRunAutoRepair}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-4 py-2 text-xs font-bold text-white hover:brightness-110 shadow-xs cursor-pointer"
-                >
-                  <Wrench className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
-                  <span>تشغيل الإصلاح التلقائي · Run Auto-Repair</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRepairMissingTranslations}
+                    disabled={repairingTranslations}
+                    className="inline-flex items-center gap-2 rounded-xl border border-[#D4A338]/70 bg-[#FBF3DC] px-3.5 py-2 text-xs font-bold text-[#1F2718] hover:bg-[#F5E7BC] disabled:opacity-60 shadow-2xs cursor-pointer"
+                  >
+                    {repairingTranslations ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#9A6F14]" aria-hidden="true" />
+                    ) : (
+                      <Languages className="h-3.5 w-3.5 text-[#9A6F14]" aria-hidden="true" />
+                    )}
+                    <span>
+                      ترجمة البطاقات المعلقة · Fix Missing Translations
+                      {missingTranslationCount > 0 ? ` (${missingTranslationCount})` : ''}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRunAutoRepair}
+                    disabled={repairingTranslations}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[linear-gradient(135deg,#2D3B22_0%,#3B4D2B_100%)] px-4 py-2 text-xs font-bold text-white hover:brightness-110 disabled:opacity-60 shadow-xs cursor-pointer"
+                  >
+                    <Wrench className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                    <span>تشغيل الإصلاح التلقائي · Run Auto-Repair</span>
+                  </button>
+                </div>
               </div>
+
+              {repairingTranslations && translationRepairProgress && (
+                <div className="rounded-xl border border-[#D4A338]/50 bg-[#FBF3DC]/70 px-3.5 py-2.5 text-xs text-[#2D3B22] flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-[#9A6F14]" aria-hidden="true" />
+                    <span className="font-semibold">
+                      {translationRepairProgress.phase === 'syncing'
+                        ? 'Syncing repaired flashcards to Supabase vocabulary_cards...'
+                        : `Translating ${translationRepairProgress.completed + 1} of ${translationRepairProgress.total}: `}
+                    </span>
+                    {translationRepairProgress.phase === 'translating' &&
+                      translationRepairProgress.currentWord && (
+                        <span
+                          dir="rtl"
+                          lang="ar"
+                          className="font-arabic-scheherazade text-base font-bold text-[#1F2718]"
+                        >
+                          {translationRepairProgress.currentWord}
+                        </span>
+                      )}
+                  </div>
+                  <span className="font-mono text-[11px] text-[#5A6552]">
+                    Fixed: {translationRepairProgress.fixedCount} · Retry:{' '}
+                    {translationRepairProgress.retryCount}
+                  </span>
+                </div>
+              )}
+
+              {translationRepairSummary && (
+                <div className="rounded-xl border border-[#3B4D2B]/30 bg-[#EEF2E9]/75 p-3 space-y-2 text-xs text-[#1F2718]">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold text-[#2D3B22] flex items-center gap-1.5">
+                      <CheckCircle2 className="h-4 w-4 text-[#2D3B22]" aria-hidden="true" />
+                      <span>
+                        {translationRepairSummary.affectedCount === 0
+                          ? `All ${translationRepairSummary.scannedCount} flashcards already have valid translations.`
+                          : `Translation Repair Summary: ${translationRepairSummary.fixedCount} fixed · ${translationRepairSummary.retryCount} still need retry (out of ${translationRepairSummary.affectedCount} scanned)`}
+                      </span>
+                    </span>
+                    {translationRepairSummary.supabaseAttempted && (
+                      <span
+                        className={`font-semibold text-[11px] ${
+                          translationRepairSummary.supabaseSynced
+                            ? 'text-[#2D3B22]'
+                            : 'text-rose-700'
+                        }`}
+                      >
+                        {translationRepairSummary.supabaseSynced
+                          ? `Synced ${translationRepairSummary.supabaseSyncedCount} card(s) to Supabase`
+                          : `Supabase sync error: ${translationRepairSummary.supabaseError || 'Check connection'}`}
+                      </span>
+                    )}
+                  </div>
+
+                  {translationRepairSummary.fixedWords.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {translationRepairSummary.fixedWords.slice(0, 8).map((item) => (
+                        <span
+                          key={item.cardId}
+                          className="inline-flex items-center gap-1 rounded-lg border border-[#3B4D2B]/25 bg-white px-2 py-0.5 text-[11px]"
+                        >
+                          <span dir="rtl" lang="ar" className="font-arabic-scheherazade font-bold">
+                            {item.word}
+                          </span>
+                          <span className="text-[#5A6552]">→ {item.englishMeaning}</span>
+                        </span>
+                      ))}
+                      {translationRepairSummary.fixedWords.length > 8 && (
+                        <span className="text-[11px] text-[#5A6552] self-center">
+                          +{translationRepairSummary.fixedWords.length - 8} more
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {translationRepairSummary.retryItems.length > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-[#FBF3DC] p-2.5 space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-[#7A560B]">
+                          Still needing retry ({translationRepairSummary.retryItems.length}):
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleRepairMissingTranslations}
+                          disabled={repairingTranslations}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#2D3B22] px-2.5 py-1 text-[11px] font-bold text-white hover:bg-[#3B4D2B] cursor-pointer"
+                        >
+                          <RefreshCw className="h-3 w-3 text-[#FACC15]" aria-hidden="true" />
+                          <span>Retry Unresolved</span>
+                        </button>
+                      </div>
+                      <ul className="space-y-0.5 text-[11px] text-[#5A6552]">
+                        {translationRepairSummary.retryItems.slice(0, 6).map((item) => (
+                          <li key={item.cardId}>
+                            <span dir="rtl" lang="ar" className="font-arabic-scheherazade font-bold text-[#1F2718]">
+                              {item.word}
+                            </span>{' '}
+                            — {item.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {repairReport && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 rounded-xl border border-[#3B4D2B]/25 bg-[#EEF2E9]/70 p-3 text-[11px] text-[#2D3B22]">
@@ -1211,7 +1828,7 @@ export function UserManagementModal({
                         repairReport.removedWordCachePlaceholders +
                         repairReport.repairedOtherAccountCards}
                     </span>
-                    <span>Placeholders cleaned</span>
+                    <span>Placeholders detected</span>
                   </div>
                   <div>
                     <span className="block font-bold font-mono text-sm">
@@ -1522,15 +2139,32 @@ export function UserManagementModal({
             {/* Footer Actions */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#DCE5D3] bg-white px-5 py-3.5">
               <span className="text-xs text-[#5A6552]">
-                Includes: <span className="font-semibold">profiles</span>, <span className="font-semibold">vocabulary_cards</span>, <span className="font-semibold">study_notes</span>, <span className="font-semibold">user_progress</span> + Primary Owner Triggers
+                Includes: <span className="font-semibold">profiles</span>, <span className="font-semibold">vocabulary_cards</span>, <span className="font-semibold">study_notes</span>, <span className="font-semibold">user_progress</span>, <span className="font-semibold">lessons</span>
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setShowSqlViewer(false)}
                   className="rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#5A6552] hover:bg-[#EEF2E9] cursor-pointer"
                 >
                   إغلاق · Close
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyLessonsRlsSql}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#3B4D2B]/35 bg-[#EEF2E9] px-3.5 py-1.5 text-xs font-bold text-[#2D3B22] hover:bg-[#DCE5D3] cursor-pointer"
+                >
+                  {copiedLessonsRlsSql ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-[#3B4D2B]" aria-hidden="true" />
+                      <span>تم نسخ سياسات lessons!</span>
+                    </>
+                  ) : (
+                    <>
+                      <ClipboardCopy className="h-3.5 w-3.5 text-[#3B4D2B]" aria-hidden="true" />
+                      <span>نسخ إصلاح RLS لـ lessons</span>
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
