@@ -5,6 +5,7 @@ import {
   Loader2,
   Plus,
   Sparkles,
+  Tag,
   Trash2,
   Volume2,
   X,
@@ -19,10 +20,16 @@ import {
   stripTashkeel,
   unlockArabicAudioContext,
 } from '../utils/arabic';
+import {
+  normalizeVocabTags,
+  parseTagInput,
+  SUGGESTED_VOCAB_TAGS,
+} from '../utils/vocabTags';
 
 interface EditVocabCardModalProps {
   card: VocabCard;
   speechRate: number;
+  availableTags?: string[];
   onSave: (updatedCard: VocabCard, previousCard: VocabCard) => void;
   onClose: () => void;
 }
@@ -45,12 +52,15 @@ const TASHKEEL_BUTTONS: Array<{ mark: string; labelAr: string; labelEn: string }
 export function EditVocabCardModal({
   card,
   speechRate,
+  availableTags = [],
   onSave,
   onClose,
 }: EditVocabCardModalProps) {
   const [wordAr, setWordAr] = useState(card.wordWithTashkeel);
   const [englishMeaning, setEnglishMeaning] = useState(card.englishMeaning);
   const [transliteration, setTransliteration] = useState(card.transliteration);
+  const [tags, setTags] = useState<string[]>(() => normalizeVocabTags(card.tags));
+  const [tagInput, setTagInput] = useState('');
   const [examples, setExamples] = useState<SentencePair[]>(() =>
     card.examples.length > 0
       ? card.examples.slice(0, 3).map((ex) => ({ ...ex }))
@@ -196,6 +206,23 @@ export function EditVocabCardModal({
     }
   };
 
+  const handleAddTagsFromString = (rawValue: string) => {
+    const parsed = parseTagInput(rawValue);
+    if (parsed.length === 0) return;
+    setTags((prev) => normalizeVocabTags([...prev, ...parsed]));
+    setTagInput('');
+  };
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    const key = tagToRemove.toLowerCase();
+    setTags((prev) => prev.filter((t) => t.toLowerCase() !== key));
+  };
+
+  const quickTagSuggestions = normalizeVocabTags([
+    ...availableTags,
+    ...SUGGESTED_VOCAB_TAGS,
+  ]).filter((candidate) => !tags.some((t) => t.toLowerCase() === candidate.toLowerCase()));
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanedWord = wordAr.trim();
@@ -212,6 +239,16 @@ export function EditVocabCardModal({
       }))
       .filter((ex) => ex.arabic.length > 0);
 
+    const pendingTags = tagInput.trim() ? parseTagInput(tagInput) : [];
+    const finalTags = normalizeVocabTags([...tags, ...pendingTags]);
+    const finalMeaning = englishMeaning.trim() || card.englishMeaning;
+    const finalTranslit = transliteration.trim() || card.transliteration;
+    const textContentChanged =
+      cleanedWord !== card.wordWithTashkeel ||
+      finalMeaning !== card.englishMeaning ||
+      finalTranslit !== card.transliteration ||
+      JSON.stringify(cleanedExamples) !== JSON.stringify(card.examples);
+
     stopArabicSpeech();
 
     const updatedCard: VocabCard = {
@@ -223,10 +260,11 @@ export function EditVocabCardModal({
         partOfSpeech: card.partOfSpeech,
       }),
       normalizedKey: normalizeStandaloneArabicKey(cleanedWord) || card.normalizedKey,
-      englishMeaning: englishMeaning.trim() || card.englishMeaning,
-      transliteration: transliteration.trim() || card.transliteration,
+      englishMeaning: finalMeaning,
+      transliteration: finalTranslit,
       examples: cleanedExamples,
-      hasCustomEdits: true,
+      tags: finalTags.length > 0 ? finalTags : undefined,
+      hasCustomEdits: card.hasCustomEdits || textContentChanged,
     };
 
     onSave(updatedCard, card);
@@ -393,6 +431,99 @@ export function EditVocabCardModal({
                 className="w-full rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2 font-mono text-sm text-[#1F2718] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15"
               />
             </div>
+          </div>
+
+          {/* Custom User Tags */}
+          <div className="space-y-2.5 border-t border-[#DCE5D3] pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor="edit-card-tag-input"
+                className="text-xs font-semibold text-[#2D3B22] flex items-center gap-1.5"
+              >
+                <Tag className="h-3.5 w-3.5 text-[#9A6F14]" aria-hidden="true" />
+                <span>Custom Tags</span>
+                <span className="text-[#9A6F14] font-arabic-cairo">· التصنيفات المخصصة</span>
+              </label>
+              <span className="text-[11px] text-[#5A6552]">
+                Organize by topic or category
+              </span>
+            </div>
+
+            {tags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#3B4D2B]/30 bg-[#EEF2E9] px-2.5 py-1 text-xs font-semibold text-[#2D3B22]"
+                  >
+                    <Tag className="h-3 w-3 text-[#9A6F14]" aria-hidden="true" />
+                    <span>{tag}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag)}
+                      aria-label={`Remove tag ${tag}`}
+                      className="rounded p-0.5 text-[#5A6552] hover:bg-[#DCE5D3] hover:text-[#1F2718] cursor-pointer"
+                    >
+                      <X className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <input
+                id="edit-card-tag-input"
+                type="text"
+                value={tagInput}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val.includes(',') || val.includes('،')) {
+                    handleAddTagsFromString(val);
+                  } else {
+                    setTagInput(val);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddTagsFromString(tagInput);
+                  }
+                }}
+                placeholder="Type a custom tag (e.g. Travel, Verbs, Daily Life)..."
+                className="flex-1 rounded-xl border border-[#DCE5D3] bg-white px-3.5 py-2 text-xs text-[#1F2718] placeholder:text-[#6B7861] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15"
+              />
+              <button
+                type="button"
+                onClick={() => handleAddTagsFromString(tagInput)}
+                disabled={!tagInput.trim()}
+                className="inline-flex items-center gap-1 rounded-xl border border-[#3B4D2B] bg-[#2D3B22] px-3 py-2 text-xs font-semibold text-white hover:bg-[#3B4D2B] disabled:opacity-45 transition-colors cursor-pointer shrink-0"
+              >
+                <Plus className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                <span>Add Tag</span>
+              </button>
+            </div>
+
+            {quickTagSuggestions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[11px] font-medium text-[#5A6552] mr-0.5">
+                  Quick add:
+                </span>
+                {quickTagSuggestions.slice(0, 8).map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() =>
+                      setTags((prev) => normalizeVocabTags([...prev, suggestion]))
+                    }
+                    className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#CDE0C4] bg-white px-2 py-0.5 text-[11px] font-medium text-[#4A5543] hover:border-[#2D3B22] hover:bg-[#FBF3DC]/70 hover:text-[#2D3B22] transition-colors cursor-pointer"
+                  >
+                    <Plus className="h-2.5 w-2.5 text-[#9A6F14]" aria-hidden="true" />
+                    <span>{suggestion}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Example Sentences & Diacritics */}

@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS public.vocabulary_cards (
   status TEXT NOT NULL DEFAULT 'needs_review' CHECK (status IN ('needs_review', 'learned')),
   srs_rating TEXT CHECK (srs_rating IN ('hard', 'good', 'easy')),
   examples JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
   has_custom_edits BOOLEAN DEFAULT FALSE,
   created_at BIGINT NOT NULL,
   last_reviewed_at BIGINT,
@@ -123,6 +124,9 @@ CREATE TABLE IF NOT EXISTS public.vocabulary_cards (
   review_count INTEGER DEFAULT 0,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.vocabulary_cards
+  ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_vocab_cards_user_id ON public.vocabulary_cards(user_id);
 CREATE INDEX IF NOT EXISTS idx_vocab_cards_status ON public.vocabulary_cards(user_id, status);

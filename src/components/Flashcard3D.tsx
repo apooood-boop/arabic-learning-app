@@ -10,6 +10,7 @@ import {
   Pencil,
   RotateCw,
   Sparkles,
+  Tag,
   Trash2,
   Volume2,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ import {
   stopArabicSpeech,
   unlockArabicAudioContext,
 } from '../utils/arabic';
+import { normalizeVocabTags } from '../utils/vocabTags';
 
 interface Flashcard3DProps {
   card: VocabCard;
@@ -224,6 +226,7 @@ export function Flashcard3D({
     ? 'h-[min(72dvh,500px)] sm:h-[490px]'
     : 'h-[min(66dvh,450px)] sm:h-[440px]';
   const srsInfo = card.srsRating ? SRS_META[card.srsRating] : null;
+  const cardTags = normalizeVocabTags(card.tags);
   const { wordType, root } = enrichWordMeta(
     card.wordWithTashkeel,
     card.partOfSpeech,
@@ -510,6 +513,20 @@ export function Flashcard3D({
               >
                 {card.englishMeaning}
               </h3>
+
+              {cardTags.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  {cardTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#FACC15]/55 bg-[#FEF9C3]/65 px-2 py-0.5 text-[11px] font-semibold text-[#2D3B22]"
+                    >
+                      <Tag className="h-2.5 w-2.5 text-[#9A6F14]" aria-hidden="true" />
+                      <span>{tag}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Arabic Contextual Examples + English Translation Underneath */}

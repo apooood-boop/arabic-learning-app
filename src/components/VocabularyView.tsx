@@ -20,13 +20,16 @@ import {
   NotebookPen,
   Pencil,
   Play,
+  Plus,
   RefreshCw,
   RotateCw,
   Search,
   SquareStack,
+  Tag,
   Trash2,
   Volume2,
   Wrench,
+  X,
   Zap,
 } from 'lucide-react';
 import { enrichWordMeta, getLexiconSpeechText } from '../data/fallbackLexicon';
@@ -46,6 +49,13 @@ import {
   unlockArabicAudioContext,
 } from '../utils/arabic';
 import { exportVocabularyAsCsv, exportVocabularyAsJson } from '../utils/exportVocab';
+import {
+  cardHasTag,
+  collectDeckTags,
+  normalizeVocabTags,
+  parseTagInput,
+  SUGGESTED_VOCAB_TAGS,
+} from '../utils/vocabTags';
 import {
   filterCardsOwnedByUser,
   isCardNeedingRepair,
@@ -109,6 +119,10 @@ export function VocabularyView({
   const [filter, setFilter] = useState<'all' | 'hard' | PracticeStatus>(
     initialScope === 'hard' ? 'hard' : 'all'
   );
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string>('all');
+  const [tagFilterMenuOpen, setTagFilterMenuOpen] = useState(false);
+  const [tagPopoverCardId, setTagPopoverCardId] = useState<string | null>(null);
+  const [quickTagInput, setQuickTagInput] = useState('');
   const [query, setQuery] = useState('');
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exportedFormat, setExportedFormat] = useState<'csv' | 'json' | null>(null);
@@ -134,6 +148,8 @@ export function VocabularyView({
   const [slideKey, setSlideKey] = useState(0);
 
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const tagFilterMenuRef = useRef<HTMLDivElement>(null);
+  const tagPopoverRef = useRef<HTMLDivElement>(null);
   const prevReqSeqRef = useRef(scopeRequestSeq);
   const translationWatchdogRef = useRef<number | null>(null);
   const translationNoticeTimerRef = useRef<number | null>(null);
@@ -151,14 +167,31 @@ export function VocabularyView({
   }, [scopeRequestSeq, initialScope, initialMode]);
 
   useEffect(() => {
-    if (!exportMenuOpen) return;
+    if (!exportMenuOpen && !tagFilterMenuOpen && !tagPopoverCardId) return;
     const handleOutside = (e: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (exportMenuOpen && exportMenuRef.current && !exportMenuRef.current.contains(target)) {
         setExportMenuOpen(false);
+      }
+      if (
+        tagFilterMenuOpen &&
+        tagFilterMenuRef.current &&
+        !tagFilterMenuRef.current.contains(target)
+      ) {
+        setTagFilterMenuOpen(false);
+      }
+      if (tagPopoverCardId && tagPopoverRef.current && !tagPopoverRef.current.contains(target)) {
+        setTagPopoverCardId(null);
+        setQuickTagInput('');
       }
     };
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExportMenuOpen(false);
+      if (e.key === 'Escape') {
+        setExportMenuOpen(false);
+        setTagFilterMenuOpen(false);
+        setTagPopoverCardId(null);
+        setQuickTagInput('');
+      }
     };
     window.addEventListener('mousedown', handleOutside);
     window.addEventListener('keydown', handleEscape);
@@ -166,7 +199,7 @@ export function VocabularyView({
       window.removeEventListener('mousedown', handleOutside);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [exportMenuOpen]);
+  }, [exportMenuOpen, tagFilterMenuOpen, tagPopoverCardId]);
 
   const handleExport = (format: 'csv' | 'json') => {
     if (cards.length === 0) return;
@@ -220,21 +253,83 @@ export function VocabularyView({
     }
   }, [analysisCache, cards, currentUser, onAnalysisCacheRepaired, onCardsRepaired, repairingTranslations]);
 
+  const deckTags = useMemo(() => collectDeckTags(cards), [cards]);
+  const allTagNames = useMemo(() => deckTags.map((t) => t.tag), [deckTags]);
+  const untaggedCount = useMemo(
+    () => cards.filter((c) => normalizeVocabTags(c.tags).length === 0).length,
+    [cards]
+  );
+
+  useEffect(() => {
+    if (selectedTagFilter === 'all' || selectedTagFilter === '__untagged__') return;
+    const stillExists = deckTags.some(
+      (item) => item.tag.toLowerCase() === selectedTagFilter.toLowerCase()
+    );
+    if (!stillExists) {
+      setSelectedTagFilter('all');
+    }
+  }, [deckTags, selectedTagFilter]);
+
+  const handleToggleCardTag = useCallback(
+    (card: VocabCard, tagName: string) => {
+      if (!onEditCard) return;
+      const existing = normalizeVocabTags(card.tags);
+      const targetKey = tagName.toLowerCase();
+      const exists = existing.some((t) => t.toLowerCase() === targetKey);
+      const nextTags = exists
+        ? existing.filter((t) => t.toLowerCase() !== targetKey)
+        : normalizeVocabTags([...existing, tagName]);
+
+      onEditCard(
+        {
+          ...card,
+          tags: nextTags.length > 0 ? nextTags : undefined,
+        },
+        card
+      );
+    },
+    [onEditCard]
+  );
+
+  const handleAddQuickTagsToCard = useCallback(
+    (card: VocabCard, rawInput: string) => {
+      if (!onEditCard) return;
+      const parsed = parseTagInput(rawInput);
+      if (parsed.length === 0) return;
+      const nextTags = normalizeVocabTags([...(card.tags ?? []), ...parsed]);
+      onEditCard(
+        {
+          ...card,
+          tags: nextTags.length > 0 ? nextTags : undefined,
+        },
+        card
+      );
+      setQuickTagInput('');
+    },
+    [onEditCard]
+  );
+
   const filteredCards = useMemo(() => {
     const q = query.trim().toLowerCase();
     const qStripped = stripTashkeel(q);
     return cards.filter((card) => {
       if (filter === 'hard' && card.srsRating !== 'hard') return false;
       if (filter !== 'all' && filter !== 'hard' && card.status !== filter) return false;
+      if (selectedTagFilter === '__untagged__') {
+        if (normalizeVocabTags(card.tags).length > 0) return false;
+      } else if (selectedTagFilter !== 'all') {
+        if (!cardHasTag(card, selectedTagFilter)) return false;
+      }
       if (!q) return true;
       return (
         card.englishMeaning.toLowerCase().includes(q) ||
         card.transliteration.toLowerCase().includes(q) ||
         stripTashkeel(card.wordWithTashkeel).includes(qStripped) ||
-        card.wordWithTashkeel.includes(q)
+        card.wordWithTashkeel.includes(q) ||
+        normalizeVocabTags(card.tags).some((tag) => tag.toLowerCase().includes(q))
       );
     });
-  }, [cards, filter, query]);
+  }, [cards, filter, query, selectedTagFilter]);
 
   // Clamp focusIndex when filters change
   useEffect(() => {
@@ -812,7 +907,198 @@ export function VocabularyView({
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {/* Filter by Tags Dropdown */}
+                  <div className="relative" ref={tagFilterMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => setTagFilterMenuOpen((prev) => !prev)}
+                      aria-expanded={tagFilterMenuOpen}
+                      aria-haspopup="listbox"
+                      aria-label="Filter by Tags"
+                      className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-semibold shadow-2xs transition-colors whitespace-nowrap cursor-pointer ${
+                        selectedTagFilter !== 'all'
+                          ? 'border-[#3B4D2B] bg-[#2D3B22] text-white hover:bg-[#3B4D2B]'
+                          : 'border-[#DCE5D3] bg-white text-[#1F2718] hover:bg-[#EEF2E9]'
+                      }`}
+                    >
+                      <Tag
+                        className={`h-3.5 w-3.5 ${
+                          selectedTagFilter !== 'all' ? 'text-[#FACC15]' : 'text-[#9A6F14]'
+                        }`}
+                        aria-hidden="true"
+                      />
+                      <span>
+                        {selectedTagFilter === 'all'
+                          ? 'Filter by Tags'
+                          : selectedTagFilter === '__untagged__'
+                            ? 'Tag: Untagged'
+                            : `Tag: ${selectedTagFilter}`}
+                      </span>
+                      {selectedTagFilter !== 'all' && (
+                        <span className="rounded-full bg-[#FACC15] px-1.5 py-0.2 font-mono text-[10px] font-bold text-[#1F2718]">
+                          {filteredCards.length}
+                        </span>
+                      )}
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 transition-transform ${
+                          tagFilterMenuOpen ? 'rotate-180' : ''
+                        } ${selectedTagFilter !== 'all' ? 'text-[#FEF08A]' : 'text-[#5A6552]'}`}
+                        aria-hidden="true"
+                      />
+                    </button>
+
+                    {tagFilterMenuOpen && (
+                      <div
+                        role="listbox"
+                        aria-label="Filter by Tags"
+                        className="animate-popover-in absolute left-0 sm:right-0 sm:left-auto top-11 z-30 w-64 rounded-2xl border border-[#DCE5D3] bg-white p-2 shadow-xl space-y-1 max-h-80 overflow-y-auto"
+                      >
+                        <div className="flex items-center justify-between px-2.5 py-1">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-[#5A6552]">
+                            Filter by Tags
+                          </span>
+                          {selectedTagFilter !== 'all' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTagFilter('all');
+                                setTagFilterMenuOpen(false);
+                              }}
+                              className="text-[11px] font-semibold text-[#9A6F14] hover:underline cursor-pointer"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={selectedTagFilter === 'all'}
+                          onClick={() => {
+                            setSelectedTagFilter('all');
+                            setTagFilterMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold transition-colors cursor-pointer ${
+                            selectedTagFilter === 'all'
+                              ? 'bg-[#2D3B22] text-white'
+                              : 'text-[#1F2718] hover:bg-[#EEF2E9]'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <Check
+                              className={`h-3.5 w-3.5 ${
+                                selectedTagFilter === 'all' ? 'text-[#FACC15]' : 'opacity-0'
+                              }`}
+                              aria-hidden="true"
+                            />
+                            <span>All Tags</span>
+                          </span>
+                          <span
+                            className={`font-mono text-[11px] ${
+                              selectedTagFilter === 'all' ? 'text-[#FEF08A]' : 'text-[#5A6552]'
+                            }`}
+                          >
+                            {cards.length}
+                          </span>
+                        </button>
+
+                        {untaggedCount > 0 && (
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={selectedTagFilter === '__untagged__'}
+                            onClick={() => {
+                              setSelectedTagFilter('__untagged__');
+                              setTagFilterMenuOpen(false);
+                            }}
+                            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold transition-colors cursor-pointer ${
+                              selectedTagFilter === '__untagged__'
+                                ? 'bg-[#2D3B22] text-white'
+                                : 'text-[#5A6552] hover:bg-[#EEF2E9] hover:text-[#1F2718]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <Check
+                                className={`h-3.5 w-3.5 ${
+                                  selectedTagFilter === '__untagged__'
+                                    ? 'text-[#FACC15]'
+                                    : 'opacity-0'
+                                }`}
+                                aria-hidden="true"
+                              />
+                              <span>Untagged Cards</span>
+                            </span>
+                            <span
+                              className={`font-mono text-[11px] ${
+                                selectedTagFilter === '__untagged__'
+                                  ? 'text-[#FEF08A]'
+                                  : 'text-[#5A6552]'
+                              }`}
+                            >
+                              {untaggedCount}
+                            </span>
+                          </button>
+                        )}
+
+                        {deckTags.length > 0 ? (
+                          <div className="border-t border-[#EEF2E9] pt-1 space-y-0.5">
+                            {deckTags.map(({ tag, count }) => {
+                              const isSelected =
+                                selectedTagFilter.toLowerCase() === tag.toLowerCase();
+                              return (
+                                <button
+                                  key={tag}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={isSelected}
+                                  onClick={() => {
+                                    setSelectedTagFilter(tag);
+                                    setTagFilterMenuOpen(false);
+                                  }}
+                                  className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-colors cursor-pointer ${
+                                    isSelected
+                                      ? 'bg-[#2D3B22] text-white'
+                                      : 'text-[#1F2718] hover:bg-[#EEF2E9]'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-2 min-w-0">
+                                    <Check
+                                      className={`h-3.5 w-3.5 shrink-0 ${
+                                        isSelected ? 'text-[#FACC15]' : 'opacity-0'
+                                      }`}
+                                      aria-hidden="true"
+                                    />
+                                    <Tag
+                                      className={`h-3 w-3 shrink-0 ${
+                                        isSelected ? 'text-[#FACC15]' : 'text-[#9A6F14]'
+                                      }`}
+                                      aria-hidden="true"
+                                    />
+                                    <span className="truncate">{tag}</span>
+                                  </span>
+                                  <span
+                                    className={`font-mono text-[11px] shrink-0 ${
+                                      isSelected ? 'text-[#FEF08A]' : 'text-[#5A6552]'
+                                    }`}
+                                  >
+                                    {count}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="border-t border-[#EEF2E9] px-3 py-2 text-[11px] text-[#5A6552] leading-relaxed">
+                            No custom tags yet. Tap <span className="font-semibold">+ Tag</span> on
+                            any card to organize by topic.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   {/* View Mode Switcher: Compact Airy Grid vs Interactive Focus Card */}
                   <div
                     role="group"
@@ -856,7 +1142,7 @@ export function VocabularyView({
                       type="search"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Search Arabic or English..."
+                      placeholder="Search Arabic, English, or tag..."
                       aria-label="Search saved vocabulary"
                       className="w-full rounded-xl border border-[#DCE5D3] bg-white py-2 pl-9 pr-3 text-base sm:text-sm text-[#1F2718] placeholder:text-[#6B7861] focus:border-[#2D3B22] focus:outline-none focus:ring-2 focus:ring-[#2D3B22]/15"
                     />
@@ -1029,10 +1315,25 @@ export function VocabularyView({
                 )}
 
               {filteredCards.length === 0 ? (
-                <div className="rounded-2xl border border-[#DCE5D3] bg-white p-10 text-center text-sm text-[#5A6552]">
-                  {filter === 'hard' && !query
-                    ? 'No flashcards are marked as Difficult / Hard yet. Tap the flame icon on any card to mark it Hard.'
-                    : 'No flashcards match your current search or filter.'}
+                <div className="rounded-2xl border border-[#DCE5D3] bg-white p-10 text-center text-sm text-[#5A6552] space-y-3">
+                  <p>
+                    {filter === 'hard' && !query && selectedTagFilter === 'all'
+                      ? 'No flashcards are marked as Difficult / Hard yet. Tap the flame icon on any card to mark it Hard.'
+                      : 'No flashcards match your current search or filter.'}
+                  </p>
+                  {(selectedTagFilter !== 'all' || filter !== 'all' || query) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTagFilter('all');
+                        setFilter('all');
+                        setQuery('');
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#DCE5D3] bg-[#EEF2E9] px-3.5 py-1.5 text-xs font-semibold text-[#2D3B22] hover:bg-[#DCE5D3] cursor-pointer"
+                    >
+                      <span>Reset all filters</span>
+                    </button>
+                  )}
                 </div>
               ) : viewMode === 'grid' ? (
                 /* VIEW MODE 1: شبكة مريحة (Compact Airy Grid) */
@@ -1043,6 +1344,15 @@ export function VocabularyView({
                     const isAudioPlaying =
                       gridAudioState?.cardId === card.id && gridAudioState.phase === 'playing';
                     const isExpanded = expandedGridCardId === card.id;
+                    const cardTags = normalizeVocabTags(card.tags);
+                    const isTagPopoverOpen = tagPopoverCardId === card.id;
+                    const quickSuggestions = normalizeVocabTags([
+                      ...allTagNames,
+                      ...SUGGESTED_VOCAB_TAGS,
+                    ]).filter(
+                      (candidate) =>
+                        !cardTags.some((t) => t.toLowerCase() === candidate.toLowerCase())
+                    );
                     const { wordType, root } = enrichWordMeta(
                       card.wordWithTashkeel,
                       card.partOfSpeech,
@@ -1054,7 +1364,9 @@ export function VocabularyView({
                       <article
                         key={card.id}
                         style={{ animationDelay: `${Math.min(idx, 8) * 35}ms` }}
-                        className="animate-fade-slide-up group flex flex-col justify-between rounded-2xl border border-[#DCE5D3] bg-white p-5 shadow-2xs transition-all duration-200 hover:-translate-y-1 hover:border-[#3B4D2B]/55 hover:shadow-md"
+                        className={`animate-fade-slide-up group relative flex flex-col justify-between rounded-2xl border border-[#DCE5D3] bg-white p-5 shadow-2xs transition-all duration-200 hover:-translate-y-1 hover:border-[#3B4D2B]/55 hover:shadow-md ${
+                          isTagPopoverOpen ? 'z-20' : ''
+                        }`}
                       >
                         {/* Top row: status text + quick actions */}
                         <div className="flex items-center justify-between gap-2 border-b border-[#EEF2E9] pb-3">
@@ -1271,6 +1583,157 @@ export function VocabularyView({
                           </div>
                         )}
 
+                        {/* Custom User Tags Row + Quick Tag Popover */}
+                        {(cardTags.length > 0 || onEditCard) && (
+                          <div className="relative mb-3 flex flex-wrap items-center gap-1.5">
+                            {cardTags.map((tag) => {
+                              const isTagActive =
+                                selectedTagFilter.toLowerCase() === tag.toLowerCase();
+                              return (
+                                <button
+                                  key={tag}
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedTagFilter((prev) =>
+                                      prev.toLowerCase() === tag.toLowerCase() ? 'all' : tag
+                                    )
+                                  }
+                                  title={
+                                    isTagActive
+                                      ? `Clear tag filter (${tag})`
+                                      : `Filter cards by "${tag}"`
+                                  }
+                                  className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-semibold transition-colors cursor-pointer ${
+                                    isTagActive
+                                      ? 'border-[#2D3B22] bg-[#2D3B22] text-[#FACC15]'
+                                      : 'border-[#FACC15]/55 bg-[#FEF9C3]/55 text-[#2D3B22] hover:bg-[#FEF08A]/70'
+                                  }`}
+                                >
+                                  <Tag
+                                    className={`h-2.5 w-2.5 ${
+                                      isTagActive ? 'text-[#FACC15]' : 'text-[#9A6F14]'
+                                    }`}
+                                    aria-hidden="true"
+                                  />
+                                  <span>{tag}</span>
+                                </button>
+                              );
+                            })}
+
+                            {onEditCard && (
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onClick={() => {
+                                  if (isTagPopoverOpen) {
+                                    setTagPopoverCardId(null);
+                                    setQuickTagInput('');
+                                  } else {
+                                    setTagPopoverCardId(card.id);
+                                    setQuickTagInput('');
+                                  }
+                                }}
+                                aria-expanded={isTagPopoverOpen}
+                                title="Add or remove custom tags"
+                                className={`inline-flex items-center gap-1 rounded-lg border border-dashed px-2 py-0.5 text-[11px] font-semibold transition-colors cursor-pointer ${
+                                  isTagPopoverOpen
+                                    ? 'border-[#2D3B22] bg-[#EEF2E9] text-[#2D3B22]'
+                                    : 'border-[#CDE0C4] bg-[#FAFBF8] text-[#5A6552] hover:border-[#2D3B22] hover:text-[#2D3B22]'
+                                }`}
+                              >
+                                <Plus className="h-2.5 w-2.5 text-[#9A6F14]" aria-hidden="true" />
+                                <span>{cardTags.length > 0 ? 'Tag' : 'Add Tag'}</span>
+                              </button>
+                            )}
+
+                            {isTagPopoverOpen && (
+                              <div
+                                ref={tagPopoverRef}
+                                className="animate-popover-in absolute bottom-8 left-0 z-30 w-64 rounded-2xl border border-[#DCE5D3] bg-white p-3 shadow-xl space-y-2.5"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-bold text-[#2D3B22] flex items-center gap-1">
+                                    <Tag className="h-3 w-3 text-[#9A6F14]" aria-hidden="true" />
+                                    <span>Manage Card Tags</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setTagPopoverCardId(null);
+                                      setQuickTagInput('');
+                                    }}
+                                    aria-label="Close tag manager"
+                                    className="rounded p-0.5 text-[#5A6552] hover:bg-[#EEF2E9] cursor-pointer"
+                                  >
+                                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                                  </button>
+                                </div>
+
+                                {cardTags.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {cardTags.map((t) => (
+                                      <span
+                                        key={t}
+                                        className="inline-flex items-center gap-1 rounded-md border border-[#3B4D2B]/30 bg-[#EEF2E9] px-2 py-0.5 text-[11px] font-semibold text-[#2D3B22]"
+                                      >
+                                        <span>{t}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleToggleCardTag(card, t)}
+                                          aria-label={`Remove ${t}`}
+                                          className="hover:text-[#C2410C] cursor-pointer"
+                                        >
+                                          <X className="h-2.5 w-2.5" aria-hidden="true" />
+                                        </button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+
+                                <form
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    handleAddQuickTagsToCard(card, quickTagInput);
+                                  }}
+                                  className="flex items-center gap-1.5"
+                                >
+                                  <input
+                                    type="text"
+                                    value={quickTagInput}
+                                    onChange={(e) => setQuickTagInput(e.target.value)}
+                                    placeholder="New tag..."
+                                    autoFocus
+                                    className="min-w-0 flex-1 rounded-lg border border-[#DCE5D3] bg-[#FAFBF8] px-2.5 py-1.5 text-xs text-[#1F2718] focus:border-[#2D3B22] focus:bg-white focus:outline-none"
+                                  />
+                                  <button
+                                    type="submit"
+                                    disabled={!quickTagInput.trim()}
+                                    className="rounded-lg bg-[#2D3B22] px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-[#3B4D2B] disabled:opacity-45 cursor-pointer"
+                                  >
+                                    Add
+                                  </button>
+                                </form>
+
+                                {quickSuggestions.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 border-t border-[#EEF2E9] pt-2">
+                                    {quickSuggestions.slice(0, 6).map((suggestion) => (
+                                      <button
+                                        key={suggestion}
+                                        type="button"
+                                        onClick={() => handleToggleCardTag(card, suggestion)}
+                                        className="inline-flex items-center gap-1 rounded-md border border-dashed border-[#CDE0C4] bg-[#FAFBF8] px-1.5 py-0.5 text-[10px] font-medium text-[#4A5543] hover:border-[#2D3B22] hover:bg-[#FBF3DC]/70 hover:text-[#2D3B22] cursor-pointer"
+                                      >
+                                        <Plus className="h-2.5 w-2.5 text-[#9A6F14]" aria-hidden="true" />
+                                        <span>{suggestion}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         {/* Footer actions */}
                         <div className="flex items-center justify-between gap-2 border-t border-[#EEF2E9] pt-3 text-xs">
                           <div className="flex items-center gap-1.5">
@@ -1482,6 +1945,7 @@ export function VocabularyView({
             <QuizMode
               cards={cards}
               speechRate={speechRate}
+              initialTagFilter={selectedTagFilter}
               onUpdateStatus={onUpdateStatus}
               onRateSrs={onRateSrs}
               onRecordReview={onRecordReview}
@@ -1502,6 +1966,7 @@ export function VocabularyView({
         <EditVocabCardModal
           card={editingCard}
           speechRate={speechRate}
+          availableTags={allTagNames}
           onClose={() => setEditingCard(null)}
           onSave={(updatedCard, previousCard) => {
             onEditCard(updatedCard, previousCard);

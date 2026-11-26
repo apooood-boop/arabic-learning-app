@@ -67,6 +67,7 @@ export interface VocabCard extends WordAnalysis {
   intervalDays?: number;
   reviewCount?: number;
   hasCustomEdits?: boolean;
+  tags?: string[];
 }
 
 export interface TranscriptSegment {

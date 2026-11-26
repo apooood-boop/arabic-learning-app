@@ -1,5 +1,6 @@
 import { VocabCard } from '../types/arabic';
 import { applySmartPartialTashkeel, stripTashkeel } from './arabic';
+import { normalizeVocabTags } from './vocabTags';
 
 function escapeCsvField(value: string | number | undefined | null): string {
   const str = value === undefined || value === null ? '' : String(value);
@@ -39,6 +40,7 @@ export function exportVocabularyAsCsv(cards: VocabCard[]) {
     'English Meaning',
     'Status',
     'SRS Rating',
+    'Tags',
     'Lesson',
     'Context 1 Label',
     'Context 1 (Arabic)',
@@ -54,6 +56,7 @@ export function exportVocabularyAsCsv(cards: VocabCard[]) {
 
   const rows = cards.map((card) => {
     const wordAr = applySmartPartialTashkeel(card.wordWithTashkeel || card.word);
+    const cardTags = normalizeVocabTags(card.tags);
     const ex0 = card.examples[0];
     const ex1 = card.examples[1];
     const ex2 = card.examples[2];
@@ -66,6 +69,7 @@ export function exportVocabularyAsCsv(cards: VocabCard[]) {
       card.englishMeaning,
       card.status === 'learned' ? 'Learned' : 'Needs Review',
       card.srsRating ?? '',
+      cardTags.join('; '),
       card.lessonTitle ?? '',
       ex0?.contextLabel ?? '',
       ex0 ? applySmartPartialTashkeel(ex0.arabic) : '',
@@ -104,6 +108,7 @@ export function exportVocabularyAsJson(cards: VocabCard[]) {
       englishMeaning: card.englishMeaning,
       status: card.status,
       srsRating: card.srsRating ?? null,
+      tags: normalizeVocabTags(card.tags),
       lessonTitle: card.lessonTitle ?? null,
       examples: card.examples.map((ex) => ({
         contextLabel: ex.contextLabel ?? null,

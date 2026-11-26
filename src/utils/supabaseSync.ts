@@ -23,6 +23,7 @@ import {
 } from './supabaseClient';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { isPrimaryOwnerEmail, resolveAccountRole } from './auth';
+import { normalizeVocabTags } from './vocabTags';
 
 export interface StudyNoteCloudResult {
   ok: boolean;
@@ -394,29 +395,33 @@ export async function fetchVocabCardsFromCloud(
     }
     if (!Array.isArray(data)) return null;
 
-    return data.map((row) => ({
-      id: row.id,
-      userId: row.user_id || resolved.userId || undefined,
-      word: row.word,
-      wordWithTashkeel: row.word_with_tashkeel,
-      vocalizedWord: row.vocalized_word || undefined,
-      normalizedKey: row.normalized_key,
-      englishMeaning: row.english_meaning,
-      transliteration: row.transliteration || '',
-      partOfSpeech: row.part_of_speech || 'Noun',
-      wordType: row.word_type || undefined,
-      root: row.root || undefined,
-      level: row.level || 'beginner',
-      status: row.status || 'needs_review',
-      srsRating: row.srs_rating || undefined,
-      examples: Array.isArray(row.examples) ? row.examples : [],
-      hasCustomEdits: Boolean(row.has_custom_edits),
-      createdAt: Number(row.created_at) || Date.now(),
-      lastReviewedAt: row.last_reviewed_at ? Number(row.last_reviewed_at) : undefined,
-      nextReviewAt: row.next_review_at ? Number(row.next_review_at) : undefined,
-      intervalDays: row.interval_days ? Number(row.interval_days) : 1,
-      reviewCount: row.review_count ? Number(row.review_count) : 0,
-    }));
+    return data.map((row) => {
+      const parsedTags = normalizeVocabTags(row.tags);
+      return {
+        id: row.id,
+        userId: row.user_id || resolved.userId || undefined,
+        word: row.word,
+        wordWithTashkeel: row.word_with_tashkeel,
+        vocalizedWord: row.vocalized_word || undefined,
+        normalizedKey: row.normalized_key,
+        englishMeaning: row.english_meaning,
+        transliteration: row.transliteration || '',
+        partOfSpeech: row.part_of_speech || 'Noun',
+        wordType: row.word_type || undefined,
+        root: row.root || undefined,
+        level: row.level || 'beginner',
+        status: row.status || 'needs_review',
+        srsRating: row.srs_rating || undefined,
+        examples: Array.isArray(row.examples) ? row.examples : [],
+        tags: parsedTags.length > 0 ? parsedTags : undefined,
+        hasCustomEdits: Boolean(row.has_custom_edits),
+        createdAt: Number(row.created_at) || Date.now(),
+        lastReviewedAt: row.last_reviewed_at ? Number(row.last_reviewed_at) : undefined,
+        nextReviewAt: row.next_review_at ? Number(row.next_review_at) : undefined,
+        intervalDays: row.interval_days ? Number(row.interval_days) : 1,
+        reviewCount: row.review_count ? Number(row.review_count) : 0,
+      };
+    });
   } catch (err) {
     console.error('[Qalam Supabase] Exception fetching vocabulary_cards:', err);
     return null;
@@ -458,33 +463,51 @@ export async function upsertVocabCardsToCloudWithResult(
   }
 
   const now = Date.now();
-  const rows = cards.map((c) => ({
-    id: c.id,
-    user_id: resolved.userId!,
-    word: c.word,
-    word_with_tashkeel: c.wordWithTashkeel,
-    vocalized_word: c.vocalizedWord || null,
-    normalized_key: c.normalizedKey,
-    english_meaning: c.englishMeaning,
-    transliteration: c.transliteration || '',
-    part_of_speech: c.partOfSpeech || 'Noun',
-    word_type: c.wordType || null,
-    root: c.root || null,
-    level: c.level || 'beginner',
-    status: c.status || 'needs_review',
-    srs_rating: c.srsRating || null,
-    examples: Array.isArray(c.examples) ? c.examples : [],
-    has_custom_edits: Boolean(c.hasCustomEdits),
-    created_at: Math.trunc(c.createdAt || now),
-    last_reviewed_at: c.lastReviewedAt ? Math.trunc(c.lastReviewedAt) : null,
-    next_review_at: c.nextReviewAt ? Math.trunc(c.nextReviewAt) : null,
-    interval_days: Math.max(1, Math.trunc(c.intervalDays || 1)),
-    review_count: Math.max(0, Math.trunc(c.reviewCount || 0)),
-    updated_at: new Date().toISOString(),
-  }));
+  const buildRows = (includeTags: boolean) =>
+    cards.map((c) => ({
+      id: c.id,
+      user_id: resolved.userId!,
+      word: c.word,
+      word_with_tashkeel: c.wordWithTashkeel,
+      vocalized_word: c.vocalizedWord || null,
+      normalized_key: c.normalizedKey,
+      english_meaning: c.englishMeaning,
+      transliteration: c.transliteration || '',
+      part_of_speech: c.partOfSpeech || 'Noun',
+      word_type: c.wordType || null,
+      root: c.root || null,
+      level: c.level || 'beginner',
+      status: c.status || 'needs_review',
+      srs_rating: c.srsRating || null,
+      examples: Array.isArray(c.examples) ? c.examples : [],
+      ...(includeTags ? { tags: normalizeVocabTags(c.tags) } : {}),
+      has_custom_edits: Boolean(c.hasCustomEdits),
+      created_at: Math.trunc(c.createdAt || now),
+      last_reviewed_at: c.lastReviewedAt ? Math.trunc(c.lastReviewedAt) : null,
+      next_review_at: c.nextReviewAt ? Math.trunc(c.nextReviewAt) : null,
+      interval_days: Math.max(1, Math.trunc(c.intervalDays || 1)),
+      review_count: Math.max(0, Math.trunc(c.reviewCount || 0)),
+      updated_at: new Date().toISOString(),
+    }));
 
   try {
-    const { error } = await client.from(TABLE_VOCAB_CARDS).upsert(rows, { onConflict: 'id' });
+    let rows = buildRows(true);
+    let { error } = await client.from(TABLE_VOCAB_CARDS).upsert(rows, { onConflict: 'id' });
+
+    if (
+      error &&
+      (error.code === 'PGRST204' ||
+        error.code === '42703' ||
+        (error.message || '').toLowerCase().includes("'tags'") ||
+        (error.message || '').toLowerCase().includes('column "tags"'))
+    ) {
+      console.warn(
+        '[Qalam Supabase] vocabulary_cards.tags column not found in database yet; retrying sync without tags. Run the latest schema SQL to persist tags in cloud.'
+      );
+      rows = buildRows(false);
+      ({ error } = await client.from(TABLE_VOCAB_CARDS).upsert(rows, { onConflict: 'id' }));
+    }
+
     if (error) {
       console.error('[Qalam Supabase] Error saving vocab cards to vocabulary_cards:', {
         code: error.code,
