@@ -54,9 +54,17 @@ export function serializeRouteToHash(route: AppNavigationRoute): string {
   return '#/lessons';
 }
 
+export function isSupabaseAuthHash(rawHash: string): boolean {
+  const trimmed = (rawHash || '').trim();
+  if (!trimmed) return false;
+  return /(?:access_token|refresh_token|token_hash|type=recovery|type=signup|type=email|type=magiclink|error_description)=/.test(
+    trimmed
+  );
+}
+
 export function parseHashToRoute(rawHash: string): ParsedHashResult | null {
   const trimmed = rawHash.trim();
-  if (!trimmed || trimmed === '#' || trimmed === '#/') {
+  if (!trimmed || trimmed === '#' || trimmed === '#/' || isSupabaseAuthHash(trimmed)) {
     return null;
   }
 
@@ -255,9 +263,10 @@ export function saveScrollY(scope: string, routeHash: string, scrollY: number): 
   }
 }
 
-export function clearUrlHash(): void {
+export function clearUrlHash(force = false): void {
   if (typeof window === 'undefined') return;
   if (!window.location.hash) return;
+  if (!force && isSupabaseAuthHash(window.location.hash)) return;
   try {
     window.history.replaceState(
       window.history.state,
@@ -319,11 +328,15 @@ export function resolveInitialNavigation(
   shouldClearHash: boolean;
 } {
   if (typeof window === 'undefined' || !isAuthenticated) {
+    const hasAuthHash =
+      typeof window !== 'undefined' &&
+      Boolean(window.location.hash) &&
+      !isSupabaseAuthHash(window.location.hash);
     return {
       route: DEFAULT_NAVIGATION_ROUTE,
       restoreScrollY: 0,
       shouldReplaceHash: false,
-      shouldClearHash: typeof window !== 'undefined' && Boolean(window.location.hash),
+      shouldClearHash: hasAuthHash,
     };
   }
 

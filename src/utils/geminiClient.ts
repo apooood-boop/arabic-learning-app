@@ -758,15 +758,18 @@ export async function analyzeArabicWordClient(params: {
   word: string;
   contextSentence?: string;
   level?: ProficiencyLevel;
+  bypassCache?: boolean;
 }): Promise<WordAnalysis> {
   const trimmedWord = params.word.trim();
   const trimmedContext = params.contextSentence?.trim() || trimmedWord;
   const targetLevel: ProficiencyLevel = params.level ?? 'intermediate';
   const cacheKey = `word::${targetLevel}::${normalizeStandaloneArabicKey(trimmedWord)}::${normalizePhraseCacheKey(trimmedContext).slice(0, 120)}`;
 
-  const cached = getCachedGeminiResult<WordAnalysis>(cacheKey);
-  if (cached && !isFakePlaceholderTranslation(cached)) {
-    return { ...cached, source: 'cache' };
+  if (!params.bypassCache) {
+    const cached = getCachedGeminiResult<WordAnalysis>(cacheKey);
+    if (cached && !isFakePlaceholderTranslation(cached)) {
+      return { ...cached, source: 'cache' };
+    }
   }
 
   const pending = inFlightClientTasks.get(cacheKey);

@@ -109,6 +109,31 @@ function readActiveUserIdHeader(): string | null {
 }
 
 /**
+ * Detects whether the current URL contains Supabase Auth callback parameters
+ * (email verification, password recovery, PKCE code, or auth error params).
+ */
+export function hasSupabaseAuthRedirectInUrl(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+  const combined = `${hash}&${search}`;
+  return /(?:access_token|refresh_token|token_hash|type=recovery|type=signup|type=email|type=magiclink|error_description)=|[?&]code=/.test(
+    combined
+  );
+}
+
+let lastRecoverySessionEmail: string | null = null;
+let hasPendingRecoveryEvent = false;
+
+export function consumePendingRecoveryEvent(): { active: boolean; email: string | null } {
+  const active = hasPendingRecoveryEvent;
+  const email = lastRecoverySessionEmail;
+  hasPendingRecoveryEvent = false;
+  lastRecoverySessionEmail = null;
+  return { active, email };
+}
+
+/**
  * Safely retrieves or initializes the Supabase client.
  * Returns null if credentials are not configured or invalid, never throwing.
  */
@@ -124,11 +149,18 @@ export function getSupabaseClient(): SupabaseClient | null {
   }
 
   try {
+    const urlHadRecovery =
+      typeof window !== 'undefined' &&
+      /type=recovery/.test(`${window.location.hash || ''}&${window.location.search || ''}`);
+    if (urlHadRecovery) {
+      hasPendingRecoveryEvent = true;
+    }
+
     supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: false,
+        detectSessionInUrl: true,
       },
       global: {
         fetch: (input, init) => {
@@ -144,6 +176,14 @@ export function getSupabaseClient(): SupabaseClient | null {
         },
       },
     });
+
+    supabaseInstance.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        hasPendingRecoveryEvent = true;
+        lastRecoverySessionEmail = session?.user?.email ?? null;
+      }
+    });
+
     return supabaseInstance;
   } catch (err) {
     console.warn('[Qalam Supabase] Failed to initialize Supabase client:', err);

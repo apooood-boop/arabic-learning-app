@@ -54,6 +54,7 @@ export interface WordAnalysis {
 
 export interface VocabCard extends WordAnalysis {
   id: string;
+  userId?: string;
   normalizedKey: string;
   lessonId?: string;
   lessonTitle?: string;

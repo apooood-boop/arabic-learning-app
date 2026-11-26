@@ -26,6 +26,7 @@ import {
   SquareStack,
   Trash2,
   Volume2,
+  Wrench,
   Zap,
 } from 'lucide-react';
 import { enrichWordMeta, getLexiconSpeechText } from '../data/fallbackLexicon';
@@ -46,7 +47,8 @@ import {
 } from '../utils/arabic';
 import { exportVocabularyAsCsv, exportVocabularyAsJson } from '../utils/exportVocab';
 import {
-  isCardMissingOrPlaceholderTranslation,
+  filterCardsOwnedByUser,
+  isCardNeedingRepair,
   repairMissingCardTranslations,
   type TranslationRepairProgress,
   type TranslationRepairSummary,
@@ -187,19 +189,25 @@ export function VocabularyView({
     [cards]
   );
   const reviewCount = cards.length - learnedCount;
+  const canRepairOwnCards = Boolean(currentUser && !currentUser.isGuest && onCardsRepaired);
+  const userOwnedCards = useMemo(
+    () => (canRepairOwnCards ? filterCardsOwnedByUser(cards, currentUser) : []),
+    [canRepairOwnCards, cards, currentUser]
+  );
   const cardsNeedingTranslationFix = useMemo(
-    () => cards.filter((c) => isCardMissingOrPlaceholderTranslation(c)),
-    [cards]
+    () => userOwnedCards.filter((c) => isCardNeedingRepair(c)),
+    [userOwnedCards]
   );
 
   const handleRepairMissingTranslations = useCallback(async () => {
-    if (repairingTranslations || !onCardsRepaired) return;
+    if (repairingTranslations || !onCardsRepaired || !currentUser || currentUser.isGuest) return;
     setRepairingTranslations(true);
     setRepairProgress(null);
     try {
       const { summary } = await repairMissingCardTranslations({
         activeUser: currentUser,
         cards,
+        enforceUserOwnership: true,
         analysisCache,
         onCardsRepaired,
         onAnalysisCacheRepaired,
@@ -608,6 +616,30 @@ export function VocabularyView({
                 )}
               </div>
 
+              {canRepairOwnCards && userOwnedCards.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleRepairMissingTranslations}
+                  disabled={repairingTranslations}
+                  title="إصلاح الترجمة والأمثلة والجذر ونوع الكلمة لكروتك فقط ومزامنتها مع السحابة"
+                  className="inline-flex items-center gap-2 rounded-xl border border-[#3B4D2B] bg-[#2D3B22] px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-[#3B4D2B] disabled:opacity-65 shadow-xs transition-all whitespace-nowrap shrink-0 cursor-pointer active:scale-[0.98]"
+                >
+                  {repairingTranslations ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-[#FACC15]" aria-hidden="true" />
+                  ) : (
+                    <Wrench className="h-4 w-4 text-[#FACC15]" aria-hidden="true" />
+                  )}
+                  <span className="font-arabic-cairo">
+                    {repairingTranslations ? 'جاري إصلاح الكروت...' : 'إصلاح الكروت'}
+                  </span>
+                  {cardsNeedingTranslationFix.length > 0 && !repairingTranslations && (
+                    <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#FACC15] px-1.5 font-mono text-[11px] font-bold text-[#1F2718]">
+                      {cardsNeedingTranslationFix.length}
+                    </span>
+                  )}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setStudyMode(studyMode === 'srs' ? 'cards' : 'srs')}
@@ -848,33 +880,34 @@ export function VocabularyView({
                 </div>
               )}
 
-              {onCardsRepaired &&
+              {canRepairOwnCards &&
                 (cardsNeedingTranslationFix.length > 0 ||
                   repairingTranslations ||
                   repairSummary !== null) && (
-                  <div className="rounded-2xl border border-[#D4A338]/60 bg-white px-4 py-3.5 shadow-2xs space-y-2.5">
+                  <div className="rounded-2xl border border-[#3B4D2B]/35 bg-white px-4 py-3.5 shadow-2xs space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex items-start gap-2.5">
-                        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#FBF3DC] text-[#9A6F14] border border-[#E5CE8F]">
+                        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#2D3B22] text-[#FACC15] border border-[#3B4D2B]">
                           <Languages className="h-4 w-4" aria-hidden="true" />
                         </span>
                         <div>
                           <p className="text-xs font-bold text-[#1F2718]">
-                            {cardsNeedingTranslationFix.length > 0
-                              ? `${cardsNeedingTranslationFix.length} flashcard${
-                                  cardsNeedingTranslationFix.length === 1 ? '' : 's'
-                                } need translation`
-                              : 'Flashcards Translation Maintenance'}
+                            <span className="font-arabic-cairo text-[#2D3B22]">
+                              إصلاح الكروت
+                            </span>
                             <span className="mx-1.5 text-[#DCE5D3]" aria-hidden="true">
                               ·
                             </span>
-                            <span className="font-arabic-cairo text-[#2D3B22]">
-                              إصلاح الترجمات الناقصة
+                            <span>
+                              {cardsNeedingTranslationFix.length > 0
+                                ? `${cardsNeedingTranslationFix.length} of your card${
+                                    cardsNeedingTranslationFix.length === 1 ? '' : 's'
+                                  } can be completed`
+                                : 'Repair My Cards'}
                             </span>
                           </p>
-                          <p className="text-[11px] text-[#5A6552]">
-                            Automatically resolves pending or placeholder card meanings and syncs
-                            updates to your deck.
+                          <p dir="rtl" lang="ar" className="font-arabic-cairo text-[11px] text-[#5A6552]">
+                            يفحص كروتك الخاصة فقط ويصلح الترجمة الإنجليزية، الأمثلة السياقية، الجذر، ونوع الكلمة ثم يزامنها مع قاعدة البيانات.
                           </p>
                         </div>
                       </div>
@@ -888,16 +921,13 @@ export function VocabularyView({
                               onClick={() => setRepairSummary(null)}
                               className="rounded-lg px-2.5 py-1.5 text-[11px] font-semibold text-[#5A6552] hover:bg-[#EEF2E9] cursor-pointer"
                             >
-                              Dismiss
+                              إغلاق · Dismiss
                             </button>
                           )}
                         <button
                           type="button"
                           onClick={handleRepairMissingTranslations}
-                          disabled={
-                            repairingTranslations ||
-                            (cardsNeedingTranslationFix.length === 0 && repairSummary === null)
-                          }
+                          disabled={repairingTranslations || userOwnedCards.length === 0}
                           className="inline-flex items-center gap-1.5 rounded-xl bg-[#2D3B22] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#3B4D2B] disabled:opacity-60 transition-colors cursor-pointer"
                         >
                           {repairingTranslations ? (
@@ -908,12 +938,12 @@ export function VocabularyView({
                           ) : (
                             <RefreshCw className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
                           )}
-                          <span>
+                          <span className="font-arabic-cairo">
                             {repairingTranslations
-                              ? 'Translating...'
+                              ? 'جاري الإصلاح...'
                               : cardsNeedingTranslationFix.length > 0
-                                ? `Fix Missing Translations (${cardsNeedingTranslationFix.length})`
-                                : 'Re-scan Deck'}
+                                ? `إصلاح الكروت (${cardsNeedingTranslationFix.length})`
+                                : 'إعادة فحص كروتي'}
                           </span>
                         </button>
                       </div>
@@ -923,8 +953,8 @@ export function VocabularyView({
                       <div className="rounded-xl border border-[#E5CE8F] bg-[#FBF3DC]/70 px-3 py-2 text-xs text-[#2D3B22] flex flex-wrap items-center justify-between gap-2">
                         <span className="font-semibold">
                           {repairProgress.phase === 'syncing'
-                            ? 'Syncing repaired flashcards to Supabase...'
-                            : `Fixing ${repairProgress.completed + 1} / ${repairProgress.total}: `}
+                            ? 'جاري مزامنة الكروت المحدّثة مع Supabase...'
+                            : `إصلاح ${repairProgress.completed + 1} / ${repairProgress.total}: `}
                           {repairProgress.phase === 'translating' && repairProgress.currentWord && (
                             <span
                               dir="rtl"
@@ -948,10 +978,10 @@ export function VocabularyView({
                             <CheckCircle2 className="h-4 w-4 text-[#2D3B22]" aria-hidden="true" />
                             <span>
                               {repairSummary.affectedCount === 0
-                                ? `All ${repairSummary.scannedCount} cards have valid translations.`
-                                : `Fixed ${repairSummary.fixedCount} card(s)${
+                                ? `تم فحص ${repairSummary.scannedCount} كرت — جميع الترجمات والأمثلة والجذور وأنواع الكلمات مكتملة!`
+                                : `تم إصلاح ${repairSummary.fixedCount} كرت${
                                     repairSummary.retryCount > 0
-                                      ? ` · ${repairSummary.retryCount} still need retry`
+                                      ? ` · ${repairSummary.retryCount} بانتظار إعادة المحاولة`
                                       : ''
                                   }`}
                             </span>
@@ -965,16 +995,22 @@ export function VocabularyView({
                               }`}
                             >
                               {repairSummary.supabaseSynced
-                                ? `Synced ${repairSummary.supabaseSyncedCount} card(s) to Supabase`
-                                : `Supabase sync error: ${repairSummary.supabaseError || 'Please retry'}`}
+                                ? `تمت مزامنة ${repairSummary.supabaseSyncedCount} كرت إلى Supabase`
+                                : `خطأ مزامنة Supabase: ${repairSummary.supabaseError || 'يرجى إعادة المحاولة'}`}
                             </span>
                           )}
                         </div>
 
+                        {repairSummary.fixedBreakdown && repairSummary.fixedCount > 0 && (
+                          <p dir="rtl" lang="ar" className="font-arabic-cairo text-[11px] text-[#3B4D2B]">
+                            التفاصيل: ترجمة ({repairSummary.fixedBreakdown.translations}) · أمثلة ({repairSummary.fixedBreakdown.examples}) · الجذر ({repairSummary.fixedBreakdown.roots}) · نوع الكلمة ({repairSummary.fixedBreakdown.partsOfSpeech})
+                          </p>
+                        )}
+
                         {repairSummary.retryItems.length > 0 && (
                           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#CDE0C4] pt-1.5 text-[11px] text-[#7A560B]">
                             <span>
-                              Needs retry:{' '}
+                              تحتاج إعادة محاولة:{' '}
                               {repairSummary.retryItems.map((item) => item.word).join('، ')}
                             </span>
                             <button
@@ -983,7 +1019,7 @@ export function VocabularyView({
                               className="inline-flex items-center gap-1 rounded-lg bg-[#2D3B22] px-2.5 py-1 font-bold text-white hover:bg-[#3B4D2B] cursor-pointer"
                             >
                               <RefreshCw className="h-3 w-3 text-[#FACC15]" aria-hidden="true" />
-                              <span>Retry</span>
+                              <span>إعادة المحاولة · Retry</span>
                             </button>
                           </div>
                         )}

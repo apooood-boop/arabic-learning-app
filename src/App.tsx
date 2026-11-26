@@ -50,9 +50,19 @@ import {
   VocabCard,
   WordAnalysis,
 } from './types/arabic';
-import { getActiveUser, isAdminUser, logoutUser } from './utils/auth';
+import {
+  getActiveUser,
+  isAdminUser,
+  logoutUser,
+  syncAuthUserFromSupabaseSession,
+} from './utils/auth';
 import { runDailyCurriculumAgent } from './utils/dailyCurriculumAgent';
-import { isSupabaseConfigured } from './utils/supabaseClient';
+import {
+  consumePendingRecoveryEvent,
+  getSupabaseClient,
+  hasSupabaseAuthRedirectInUrl,
+  isSupabaseConfigured,
+} from './utils/supabaseClient';
 import {
   canUserDeleteLesson,
   canUserViewPublishedLesson,
@@ -253,7 +263,10 @@ function migrateGuestDataToAccount(targetUserId: string) {
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getActiveUser());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'forgot' | 'recovery'>('login');
+  const [authModalEmail, setAuthModalEmail] = useState('');
+  const [authModalNotice, setAuthModalNotice] = useState<string | null>(null);
+  const [authModalError, setAuthModalError] = useState<string | null>(null);
 
   const sessionScope = currentUser ? currentUser.id : 'guest-demo';
   // Role/Auth Access Control: only signed-in non-guest users can add/manage custom content
@@ -416,6 +429,86 @@ export default function App() {
       }
     };
   }, []);
+
+  // Listen for Supabase Auth email verification & password recovery callbacks
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isSupabaseConfigured()) return;
+    const client = getSupabaseClient();
+    if (!client) return;
+
+    // Surface Supabase redirect error messages (e.g., expired confirmation or recovery links)
+    const rawParams = `${window.location.hash.replace(/^#/, '')}&${window.location.search.replace(/^\?/, '')}`;
+    const urlParams = new URLSearchParams(rawParams);
+    const authErrorDesc = urlParams.get('error_description');
+    if (authErrorDesc) {
+      setAuthModalMode('login');
+      setAuthModalEmail('');
+      setAuthModalNotice(null);
+      setAuthModalError(
+        `رابط التحقق غير صالح أو منتهي الصلاحية (${authErrorDesc}). يرجى إعادة الطلب. · Verification or reset link is invalid or expired.`
+      );
+      setIsAuthModalOpen(true);
+      clearUrlHash(true);
+    }
+
+    const pendingRecovery = consumePendingRecoveryEvent();
+    const hasRecoveryParam =
+      urlParams.get('type') === 'recovery' || pendingRecovery.active;
+    if (hasRecoveryParam) {
+      setAuthModalMode('recovery');
+      setAuthModalEmail(pendingRecovery.email || '');
+      setAuthModalError(null);
+      setAuthModalNotice(
+        'تم التحقق من رابط استعادة كلمة المرور. يمكنك الآن تعيين كلمة مرور جديدة لحسابك.'
+      );
+      setIsAuthModalOpen(true);
+    }
+
+    const {
+      data: { subscription },
+    } = client.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthModalMode('recovery');
+        setAuthModalEmail(session?.user?.email || '');
+        setAuthModalError(null);
+        setAuthModalNotice(
+          'تم التحقق من رابط استعادة كلمة المرور. يمكنك الآن تعيين كلمة مرور جديدة لحسابك.'
+        );
+        setIsAuthModalOpen(true);
+        clearUrlHash(true);
+        return;
+      }
+
+      if (event === 'SIGNED_IN' && session?.user) {
+        const hadCallback = hasSupabaseAuthRedirectInUrl();
+        void syncAuthUserFromSupabaseSession(session.user).then((syncedUser) => {
+          if (!syncedUser) return;
+          setCurrentUser((prev) => {
+            if (prev && !prev.isGuest && prev.email === syncedUser.email) {
+              return syncedUser;
+            }
+            if (!prev || prev.isGuest || hadCallback) {
+              migrateGuestDataToAccount(syncedUser.id);
+              return syncedUser;
+            }
+            return prev;
+          });
+          if (hadCallback) {
+            clearUrlHash(true);
+            setIsAuthModalOpen(false);
+            showLessonToast(
+              true,
+              'تم تأكيد بريدك الإلكتروني وتسجيل الدخول بنجاح! · Email confirmed and signed in.'
+            );
+          }
+        });
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [showLessonToast]);
 
   // Load public/authorized cloud lessons from Supabase `lessons` table
   useEffect(() => {
@@ -717,7 +810,9 @@ export default function App() {
   // Persist active view/lesson route to URL hash and sessionStorage; guard against invalid/logged-out routes
   useEffect(() => {
     if (!currentUser) {
-      clearUrlHash();
+      if (!hasSupabaseAuthRedirectInUrl()) {
+        clearUrlHash();
+      }
       hasInitializedRouteSyncRef.current = false;
       return;
     }
@@ -1115,8 +1210,11 @@ export default function App() {
     }
   };
 
-  const handleOpenAuth = (mode: 'login' | 'register' = 'login') => {
+  const handleOpenAuth = (mode: 'login' | 'register' | 'forgot' | 'recovery' = 'login') => {
     setAuthModalMode(mode);
+    setAuthModalEmail('');
+    setAuthModalNotice(null);
+    setAuthModalError(null);
     setIsAuthModalOpen(true);
   };
 
@@ -1430,6 +1528,10 @@ export default function App() {
     const newCard: VocabCard = {
       ...instantAnalysis,
       id: newCardId,
+      userId:
+        currentUser && !currentUser.isGuest
+          ? resolvedCloudUserId || currentUser.id
+          : undefined,
       word: stripTashkeel(standaloneWordAr) || instantAnalysis.word,
       wordWithTashkeel: standaloneWordAr,
       normalizedKey: standaloneKey,
@@ -1880,7 +1982,14 @@ export default function App() {
           <AuthModal
             isOpen={isAuthModalOpen}
             initialMode={authModalMode}
-            onClose={() => setIsAuthModalOpen(false)}
+            initialEmail={authModalEmail}
+            initialNotice={authModalNotice}
+            initialError={authModalError}
+            onClose={() => {
+              setIsAuthModalOpen(false);
+              setAuthModalNotice(null);
+              setAuthModalError(null);
+            }}
             onAuthenticated={(user) => {
               clearNavigationPersistence('guest-demo');
               migrateGuestDataToAccount(user.id);
@@ -1890,6 +1999,8 @@ export default function App() {
               setActiveHeroSwitch(null);
               setActiveLessonId(null);
               setWordSelection(null);
+              setAuthModalNotice(null);
+              setAuthModalError(null);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
           />
@@ -2553,11 +2664,20 @@ export default function App() {
           <AuthModal
             isOpen={isAuthModalOpen}
             initialMode={authModalMode}
-            onClose={() => setIsAuthModalOpen(false)}
+            initialEmail={authModalEmail}
+            initialNotice={authModalNotice}
+            initialError={authModalError}
+            onClose={() => {
+              setIsAuthModalOpen(false);
+              setAuthModalNotice(null);
+              setAuthModalError(null);
+            }}
             onAuthenticated={(user) => {
               migrateGuestDataToAccount(user.id);
               setCurrentUser(user);
               setWordSelection(null);
+              setAuthModalNotice(null);
+              setAuthModalError(null);
             }}
           />
 

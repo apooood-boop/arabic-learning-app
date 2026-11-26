@@ -1,4 +1,6 @@
 import { AdminManagedAccount, AuthUser, UserRole } from '../types/arabic';
+import type { User as SupabaseAuthUser } from '@supabase/supabase-js';
+import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
 import {
   deleteProfileFromCloud,
   fetchAllProfilesFromCloud,
@@ -188,12 +190,139 @@ export function saveActiveUser(user: AuthUser | null) {
   }
 }
 
+export class EmailNotConfirmedError extends Error {
+  email: string;
+  code = 'EMAIL_NOT_CONFIRMED' as const;
+
+  constructor(email: string, message?: string) {
+    super(
+      message ||
+        'لم يتم تأكيد البريد الإلكتروني بعد. يرجى التحقق من بريدك الإلكتروني أو إدخال رمز التأكيد · Please confirm your email address before signing in.'
+    );
+    this.name = 'EmailNotConfirmedError';
+    this.email = email;
+  }
+}
+
+export interface RegisterEmailResult {
+  user: AuthUser | null;
+  requiresEmailVerification: boolean;
+  email: string;
+  name: string;
+  message: string;
+}
+
+function getEmailRedirectOrigin(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return window.location.origin;
+}
+
+function mapSupabaseAuthError(message: string): string {
+  const lower = (message || '').toLowerCase();
+  if (lower.includes('already registered') || lower.includes('already exists')) {
+    return 'يوجد حساب مسجّل بهذا البريد الإلكتروني بالفعل · An account with this email already exists.';
+  }
+  if (lower.includes('email not confirmed') || lower.includes('confirm your email')) {
+    return 'لم يتم تأكيد البريد الإلكتروني بعد. يرجى تأكيد بريدك الإلكتروني أولًا · Email address is not confirmed yet.';
+  }
+  if (lower.includes('invalid login credentials')) {
+    return 'البريد الإلكتروني أو كلمة المرور غير صحيحة · Invalid email or password.';
+  }
+  if (lower.includes('rate limit') || lower.includes('too many requests')) {
+    return 'تم إرسال عدد كبير من الطلبات مؤقتًا، يرجى الانتظار قليلًا ثم المحاولة مرة أخرى · Too many requests, please wait a moment and try again.';
+  }
+  if (lower.includes('password should be at least') || lower.includes('weak password')) {
+    return `كلمة المرور يجب أن تكون ${MIN_PASSWORD_LENGTH} أحرف على الأقل · Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+  }
+  if (lower.includes('unable to validate email') || lower.includes('invalid email')) {
+    return 'يرجى إدخال بريد إلكتروني صحيح · Please enter a valid email address.';
+  }
+  if (lower.includes('expired') || lower.includes('otp') || lower.includes('token')) {
+    return 'رمز أو رابط التحقق غير صالح أو منتهي الصلاحية · Verification code or link is invalid or expired.';
+  }
+  if (lower.includes('same_password') || lower.includes('different from the old password')) {
+    return 'يرجى اختيار كلمة مرور جديدة مختلفة عن كلمة المرور السابقة · New password must differ from your previous password.';
+  }
+  return message || 'تعذّر إتمام العملية · Authentication request failed.';
+}
+
+async function upsertAccountFromSupabaseUser(params: {
+  sbUser: SupabaseAuthUser;
+  fallbackName?: string;
+  passwordForLocalHash?: string;
+}): Promise<AuthUser> {
+  const email = (params.sbUser.email || '').trim().toLowerCase();
+  const cloudProfile = email ? await fetchProfileFromCloudByEmail(email) : null;
+  const accounts = loadAccounts();
+  const localExisting = accounts.find(
+    (a) => a.id === params.sbUser.id || (email && a.email === email)
+  );
+
+  const metadataName =
+    typeof params.sbUser.user_metadata?.name === 'string'
+      ? params.sbUser.user_metadata.name.trim()
+      : typeof params.sbUser.user_metadata?.full_name === 'string'
+        ? params.sbUser.user_metadata.full_name.trim()
+        : '';
+
+  const resolvedName =
+    localExisting?.name ||
+    cloudProfile?.name ||
+    params.fallbackName?.trim() ||
+    metadataName ||
+    email.split('@')[0] ||
+    'Learner';
+
+  const resolvedRole = resolveAccountRole(
+    email,
+    cloudProfile?.role ?? localExisting?.role
+  );
+
+  let salt = localExisting?.salt || cloudProfile?.salt || '';
+  let passwordHash = localExisting?.passwordHash || cloudProfile?.passwordHash || '';
+  if (params.passwordForLocalHash) {
+    salt = generateSalt();
+    passwordHash = await hashPassword(params.passwordForLocalHash, salt);
+  }
+
+  const resolvedId = cloudProfile?.id || localExisting?.id || params.sbUser.id;
+  const createdAt =
+    localExisting?.createdAt ||
+    cloudProfile?.createdAt ||
+    (params.sbUser.created_at ? new Date(params.sbUser.created_at).getTime() : Date.now());
+
+  const mergedAccount: StoredAccount = {
+    id: resolvedId,
+    name: resolvedName,
+    email,
+    role: resolvedRole,
+    salt,
+    passwordHash,
+    createdAt,
+  };
+
+  const filtered = accounts.filter((a) => a.id !== resolvedId && a.email !== email);
+  saveAccounts([...filtered, mergedAccount]);
+  void syncRegisterProfileToCloud(mergedAccount);
+
+  return toPublicAuthUser(mergedAccount);
+}
+
+export async function syncAuthUserFromSupabaseSession(
+  sbUser: SupabaseAuthUser | null | undefined
+): Promise<AuthUser | null> {
+  if (!sbUser || !sbUser.email) return null;
+  const user = await upsertAccountFromSupabaseUser({ sbUser });
+  saveActiveUser(user);
+  return user;
+}
+
 export async function registerWithEmail(params: {
   name: string;
   email: string;
   confirmEmail: string;
   password: string;
-}): Promise<AuthUser> {
+}): Promise<RegisterEmailResult> {
   const name = params.name.trim();
   const email = params.email.trim().toLowerCase();
   const confirmEmail = params.confirmEmail.trim().toLowerCase();
@@ -212,6 +341,70 @@ export async function registerWithEmail(params: {
     throw new Error(
       `كلمة المرور يجب أن تكون ${MIN_PASSWORD_LENGTH} أحرف على الأقل · Password must be at least ${MIN_PASSWORD_LENGTH} characters.`
     );
+  }
+
+  const client = isSupabaseConfigured() ? getSupabaseClient() : null;
+  if (client) {
+    const { data, error } = await client.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: getEmailRedirectOrigin(),
+        data: { name },
+      },
+    });
+
+    if (error) {
+      throw new Error(mapSupabaseAuthError(error.message));
+    }
+
+    // Supabase returns a user object with an empty identities array if the email already exists
+    if (
+      data.user &&
+      Array.isArray(data.user.identities) &&
+      data.user.identities.length === 0
+    ) {
+      throw new Error(
+        'يوجد حساب مسجّل بهذا البريد الإلكتروني بالفعل · An account with this email already exists.'
+      );
+    }
+
+    const salt = generateSalt();
+    const passwordHash = await hashPassword(password, salt);
+    const createdAccount: StoredAccount = {
+      id: data.user?.id || `usr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      email,
+      role: resolveAccountRole(email),
+      salt,
+      passwordHash,
+      createdAt: Date.now(),
+    };
+
+    const accounts = loadAccounts().filter((a) => a.email !== email);
+    saveAccounts([...accounts, createdAccount]);
+    void syncRegisterProfileToCloud(createdAccount);
+
+    if (!data.session) {
+      return {
+        user: null,
+        requiresEmailVerification: true,
+        email,
+        name,
+        message:
+          'تم إنشاء الحساب بنجاح! تم إرسال رابط التفعيل أو رمز التحقق إلى بريدك الإلكتروني. يرجى تأكيد بريدك الإلكتروني للمتابعة.',
+      };
+    }
+
+    const user = toPublicAuthUser(createdAccount);
+    saveActiveUser(user);
+    return {
+      user,
+      requiresEmailVerification: false,
+      email,
+      name,
+      message: 'تم إنشاء الحساب وتفعيله بنجاح!',
+    };
   }
 
   const accounts = loadAccounts();
@@ -236,7 +429,77 @@ export async function registerWithEmail(params: {
 
   const user = toPublicAuthUser(newAccount);
   saveActiveUser(user);
+  return {
+    user,
+    requiresEmailVerification: false,
+    email,
+    name,
+    message: 'تم إنشاء الحساب بنجاح!',
+  };
+}
+
+export async function verifySignupOtp(params: {
+  email: string;
+  token: string;
+}): Promise<AuthUser> {
+  const email = params.email.trim().toLowerCase();
+  const token = params.token.trim();
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('يرجى إدخال بريد إلكتروني صحيح · Please enter a valid email address.');
+  }
+  if (!token || token.length < 6) {
+    throw new Error('يرجى إدخال رمز التحقق المرسل إلى بريدك الإلكتروني · Please enter the 6-digit verification code.');
+  }
+
+  const client = getSupabaseClient();
+  if (!client) {
+    throw new Error('خدمة التحقق عبر البريد غير متوفرة في الوضع المحلي · Supabase Auth is not configured.');
+  }
+
+  const { data, error } = await client.auth.verifyOtp({
+    email,
+    token,
+    type: 'signup',
+  });
+
+  if (error || !data.user) {
+    throw new Error(
+      mapSupabaseAuthError(
+        error?.message || 'رمز التحقق غير صحيح أو منتهي الصلاحية'
+      )
+    );
+  }
+
+  const user = await upsertAccountFromSupabaseUser({ sbUser: data.user });
+  saveActiveUser(user);
   return user;
+}
+
+export async function resendSignupVerificationEmail(emailInput: string): Promise<string> {
+  const email = emailInput.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('يرجى إدخال بريد إلكتروني صحيح · Please enter a valid email address.');
+  }
+
+  const client = getSupabaseClient();
+  if (!client) {
+    throw new Error('خدمة البريد غير متوفرة في الوضع المحلي · Supabase Auth is not configured.');
+  }
+
+  const { error } = await client.auth.resend({
+    type: 'signup',
+    email,
+    options: {
+      emailRedirectTo: getEmailRedirectOrigin(),
+    },
+  });
+
+  if (error) {
+    throw new Error(mapSupabaseAuthError(error.message));
+  }
+
+  return 'تم إعادة إرسال رسالة التأكيد بنجاح. يرجى فحص البريد الوارد أو الرسائل غير المرغوب فيها (Spam).';
 }
 
 export async function loginWithEmail(params: {
@@ -250,10 +513,37 @@ export async function loginWithEmail(params: {
     throw new Error('يرجى إدخال البريد الإلكتروني وكلمة المرور · Please enter both email and password.');
   }
 
+  const client = isSupabaseConfigured() ? getSupabaseClient() : null;
+  let supabaseAuthErrorMessage: string | null = null;
+
+  if (client) {
+    const { data, error } = await client.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (!error && data.user) {
+      const user = await upsertAccountFromSupabaseUser({
+        sbUser: data.user,
+        passwordForLocalHash: password,
+      });
+      saveActiveUser(user);
+      return user;
+    }
+
+    if (error) {
+      const lower = (error.message || '').toLowerCase();
+      if (lower.includes('email not confirmed') || lower.includes('confirm your email')) {
+        throw new EmailNotConfirmedError(email);
+      }
+      supabaseAuthErrorMessage = error.message;
+    }
+  }
+
   const accounts = loadAccounts();
   let account = accounts.find((a) => a.email === email);
 
-  // If not in local cache, attempt to fetch from cloud
+  // If not in local cache, attempt to fetch from cloud profiles (supports legacy accounts created prior to Supabase Auth)
   if (!account) {
     const cloudProfile = await fetchProfileFromCloudByEmail(email);
     if (cloudProfile && cloudProfile.passwordHash) {
@@ -270,7 +560,10 @@ export async function loginWithEmail(params: {
     }
   }
 
-  if (!account) {
+  if (!account || !account.passwordHash) {
+    if (supabaseAuthErrorMessage) {
+      throw new Error(mapSupabaseAuthError(supabaseAuthErrorMessage));
+    }
     throw new Error('لم يتم العثور على حساب بهذا البريد · No account found for that email.');
   }
 
@@ -294,6 +587,107 @@ export interface VerifiedPasswordResetAccount {
   email: string;
   role: UserRole;
   isPrimaryOwner: boolean;
+}
+
+export interface PasswordResetEmailResponse {
+  mode: 'supabase_email' | 'local_verify';
+  email: string;
+  message: string;
+  verifiedAccount?: VerifiedPasswordResetAccount;
+}
+
+export async function sendPasswordResetEmail(
+  emailInput: string
+): Promise<PasswordResetEmailResponse> {
+  const email = emailInput.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('يرجى إدخال بريد إلكتروني صحيح · Please enter a valid email address.');
+  }
+
+  const client = isSupabaseConfigured() ? getSupabaseClient() : null;
+  if (client) {
+    const { error } = await client.auth.resetPasswordForEmail(email, {
+      redirectTo: getEmailRedirectOrigin(),
+    });
+
+    if (error) {
+      throw new Error(mapSupabaseAuthError(error.message));
+    }
+
+    return {
+      mode: 'supabase_email',
+      email,
+      message:
+        'تم إرسال رابط استعادة كلمة المرور إلى بريدك الإلكتروني. يرجى فتح الرسالة والضغط على الرابط لتعيين كلمة مرور جديدة.',
+    };
+  }
+
+  const verifiedAccount = verifyAccountForPasswordReset(email);
+  return {
+    mode: 'local_verify',
+    email,
+    verifiedAccount,
+    message: 'تم التحقق من الحساب بنجاح. يمكنك تعيين كلمة مرور جديدة الآن.',
+  };
+}
+
+export async function completeSupabasePasswordRecovery(params: {
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<{ user: AuthUser | null; email: string; isPrimaryOwner: boolean }> {
+  const { newPassword, confirmPassword } = params;
+  if (newPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(
+      `كلمة المرور الجديدة يجب أن تكون ${MIN_PASSWORD_LENGTH} أحرف على الأقل · New password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+    );
+  }
+  if (newPassword !== confirmPassword) {
+    throw new Error(
+      'كلمتا المرور غير متطابقتين · New password and confirmation do not match.'
+    );
+  }
+
+  const client = getSupabaseClient();
+  if (!client) {
+    throw new Error('خدمة استعادة كلمة المرور غير مفعّلة · Supabase Auth is not configured.');
+  }
+
+  const { data, error } = await client.auth.updateUser({
+    password: newPassword,
+  });
+
+  if (error || !data.user) {
+    throw new Error(
+      mapSupabaseAuthError(
+        error?.message || 'تعذّر تحديث كلمة المرور. يرجى طلب رابط استعادة جديد.'
+      )
+    );
+  }
+
+  const email = (data.user.email || '').trim().toLowerCase();
+  const user = await upsertAccountFromSupabaseUser({
+    sbUser: data.user,
+    passwordForLocalHash: newPassword,
+  });
+
+  if (email) {
+    const accounts = loadAccounts();
+    const matched = accounts.find((a) => a.email === email);
+    if (matched?.salt && matched.passwordHash) {
+      void updatePasswordInCloud({
+        email,
+        salt: matched.salt,
+        passwordHash: matched.passwordHash,
+      });
+    }
+  }
+
+  saveActiveUser(user);
+  return {
+    user,
+    email,
+    isPrimaryOwner: isPrimaryOwnerEmail(email),
+  };
 }
 
 export function verifyAccountForPasswordReset(emailInput: string): VerifiedPasswordResetAccount {
@@ -600,8 +994,20 @@ export function loginAsGuest(): AuthUser {
   return guestUser;
 }
 
+export async function signOutSupabaseSession(): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  const client = getSupabaseClient();
+  if (!client) return;
+  try {
+    await client.auth.signOut();
+  } catch {
+    // Ignore sign-out errors
+  }
+}
+
 export function logoutUser() {
   saveActiveUser(null);
+  void signOutSupabaseSession();
 }
 
 export function getUserInitials(name: string): string {

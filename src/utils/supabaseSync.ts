@@ -396,6 +396,7 @@ export async function fetchVocabCardsFromCloud(
 
     return data.map((row) => ({
       id: row.id,
+      userId: row.user_id || resolved.userId || undefined,
       word: row.word,
       wordWithTashkeel: row.word_with_tashkeel,
       vocalizedWord: row.vocalized_word || undefined,
