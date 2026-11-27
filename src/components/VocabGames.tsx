@@ -15,6 +15,7 @@ import {
   Tag,
   Trophy,
   Volume2,
+  VolumeX,
   XCircle,
   Zap,
 } from 'lucide-react';
@@ -25,6 +26,7 @@ import {
   cleanWordEdgePunctuation,
   normalizeArabicWord,
   normalizeStandaloneArabicKey,
+  playQuizFeedbackSound,
   speakArabic,
   stopArabicSpeech,
   stripTashkeel,
@@ -346,6 +348,36 @@ export interface QuizModeProps {
   onSwitchToAll?: () => void;
 }
 
+const ANSWER_CONFETTI_INDICES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+const COMPLETE_CONFETTI_INDICES = [
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+];
+
+function QuizConfettiOverlay({
+  burst,
+}: {
+  burst: { key: number; mode: 'answer' | 'complete' } | null;
+}) {
+  if (!burst) return null;
+  const indices =
+    burst.mode === 'complete' ? COMPLETE_CONFETTI_INDICES : ANSWER_CONFETTI_INDICES;
+  return (
+    <div
+      key={burst.key}
+      aria-hidden="true"
+      className={`pointer-events-none absolute inset-0 z-10 mt-0! overflow-hidden ${
+        burst.mode === 'complete'
+          ? 'quiz-confetti-layer--complete'
+          : 'quiz-confetti-layer--answer'
+      }`}
+    >
+      {indices.map((idx) => (
+        <span key={idx} className="quiz-confetti-piece" />
+      ))}
+    </div>
+  );
+}
+
 export function QuizMode({
   cards,
   speechRate,
@@ -363,6 +395,26 @@ export function QuizMode({
   const [exerciseFormat, setExerciseFormat] = useState<QuizExerciseFormat>('mixed');
   const [roundSize, setRoundSize] = useState<QuizRoundSize>('all');
   const [quizTagFilter, setQuizTagFilter] = useState<string>(initialTagFilter);
+  const [soundEffectsEnabled, setSoundEffectsEnabled] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('qalam_quiz_sound_enabled') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleSoundEffects = useCallback(() => {
+    unlockArabicAudioContext();
+    setSoundEffectsEnabled((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('qalam_quiz_sound_enabled', String(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return next;
+    });
+  }, []);
 
   const deckTags = useMemo(() => collectDeckTags(cards), [cards]);
 
@@ -433,8 +485,37 @@ export function QuizMode({
   const [wrongCardIds, setWrongCardIds] = useState<string[]>([]);
   const [isComplete, setIsComplete] = useState(false);
   const [wordAudioState, setWordAudioState] = useState<'idle' | 'loading' | 'playing'>('idle');
+  const [confettiBurst, setConfettiBurst] = useState<{
+    key: number;
+    mode: 'answer' | 'complete';
+  } | null>(null);
 
   const fillInputRef = useRef<HTMLInputElement | null>(null);
+  const confettiSeqRef = useRef(0);
+  const confettiTimerRef = useRef<number | null>(null);
+
+  const clearConfetti = useCallback(() => {
+    if (confettiTimerRef.current !== null) {
+      window.clearTimeout(confettiTimerRef.current);
+      confettiTimerRef.current = null;
+    }
+    setConfettiBurst(null);
+  }, []);
+
+  const triggerConfetti = useCallback((mode: 'answer' | 'complete') => {
+    if (confettiTimerRef.current !== null) {
+      window.clearTimeout(confettiTimerRef.current);
+    }
+    confettiSeqRef.current += 1;
+    setConfettiBurst({ key: confettiSeqRef.current, mode });
+    confettiTimerRef.current = window.setTimeout(
+      () => {
+        confettiTimerRef.current = null;
+        setConfettiBurst(null);
+      },
+      mode === 'complete' ? 2250 : 1300
+    );
+  }, []);
 
   const startRound = useCallback(
     (
@@ -444,6 +525,7 @@ export function QuizMode({
       nextTag: string = quizTagFilter
     ) => {
       stopArabicSpeech();
+      clearConfetti();
       setWordAudioState('idle');
       const latestCards = cardsRef.current;
       const target = getScopedCards(latestCards, onlyCardIds, nextTag);
@@ -470,7 +552,7 @@ export function QuizMode({
       setWrongCardIds([]);
       setIsComplete(false);
     },
-    [distractorPool, exerciseFormat, getScopedCards, quizTagFilter, roundSize]
+    [clearConfetti, distractorPool, exerciseFormat, getScopedCards, quizTagFilter, roundSize]
   );
 
   // Rebuild round when scope, tag, format, round size, or deck cardinality changes
@@ -506,6 +588,9 @@ export function QuizMode({
   useEffect(() => {
     return () => {
       stopArabicSpeech();
+      if (confettiTimerRef.current !== null) {
+        window.clearTimeout(confettiTimerRef.current);
+      }
     };
   }, []);
 
@@ -560,9 +645,15 @@ export function QuizMode({
         return;
       }
       setSelectedOptionId(option.id);
+      if (soundEffectsEnabled) {
+        playQuizFeedbackSound(option.isCorrect ? 'success' : 'error');
+      }
+      if (option.isCorrect) {
+        triggerConfetti('answer');
+      }
       recordOutcome(currentQuestion.card, option.isCorrect);
     },
-    [currentQuestion, recordOutcome, selectedOptionId]
+    [currentQuestion, recordOutcome, selectedOptionId, soundEffectsEnabled, triggerConfetti]
   );
 
   const handleSubmitFillBlank = useCallback(
@@ -581,9 +672,15 @@ export function QuizMode({
       }
       const isCorrect = isFillBlankAnswerCorrect(valueToCheck, currentQuestion.fillBlank);
       setFillResult(isCorrect ? 'correct' : 'wrong');
+      if (soundEffectsEnabled) {
+        playQuizFeedbackSound(isCorrect ? 'success' : 'error');
+      }
+      if (isCorrect) {
+        triggerConfetti('answer');
+      }
       recordOutcome(currentQuestion.card, isCorrect);
     },
-    [currentQuestion, fillAnswerInput, fillResult, recordOutcome]
+    [currentQuestion, fillAnswerInput, fillResult, recordOutcome, soundEffectsEnabled, triggerConfetti]
   );
 
   const handleRevealFillAnswer = useCallback(() => {
@@ -603,7 +700,9 @@ export function QuizMode({
     setWordAudioState('idle');
     if (currentIndex + 1 >= questions.length) {
       setIsComplete(true);
+      triggerConfetti('complete');
     } else {
+      clearConfetti();
       setCurrentIndex((i) => i + 1);
       setSelectedOptionId(null);
       setFillAnswerInput('');
@@ -612,7 +711,7 @@ export function QuizMode({
       setShowWordBank(false);
       setShowContextHint(false);
     }
-  }, [currentIndex, questions.length]);
+  }, [clearConfetti, currentIndex, questions.length, triggerConfetti]);
 
   const handleToggleSpeech = useCallback(() => {
     unlockArabicAudioContext();
@@ -717,7 +816,7 @@ export function QuizMode({
 
   if (isComplete) {
     return (
-      <div className="mx-auto max-w-2xl rounded-2xl border border-[#DCE5D3] bg-white/95 p-8 text-center shadow-sm space-y-6 animate-game-pop">
+      <div className="relative overflow-hidden mx-auto max-w-2xl rounded-2xl border border-[#DCE5D3] bg-white/95 p-8 text-center shadow-sm space-y-6 animate-game-pop">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FBF3DC] text-[#9A6F14]">
           <Trophy className="h-6 w-6 text-[#D4A338]" aria-hidden="true" />
         </div>
@@ -803,6 +902,7 @@ export function QuizMode({
             <span>New Random Quiz</span>
           </button>
         </div>
+        <QuizConfettiOverlay burst={confettiBurst} />
       </div>
     );
   }
@@ -988,14 +1088,35 @@ export function QuizMode({
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={() => startRound()}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-[#5A6552] hover:text-[#1F2718] cursor-pointer whitespace-nowrap shrink-0"
-          >
-            <Shuffle className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>New Random Round</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleToggleSoundEffects}
+              aria-pressed={soundEffectsEnabled}
+              title={soundEffectsEnabled ? 'Mute answer feedback sounds' : 'Unmute answer feedback sounds'}
+              className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                soundEffectsEnabled
+                  ? 'border-[#DCE5D3] bg-[#EEF2E9] text-[#2D3B22] hover:bg-[#E2EAD9]'
+                  : 'border-[#DCE5D3] bg-white text-[#5A6552] hover:text-[#1F2718]'
+              }`}
+            >
+              {soundEffectsEnabled ? (
+                <Volume2 className="h-3.5 w-3.5 text-[#2D3B22]" aria-hidden="true" />
+              ) : (
+                <VolumeX className="h-3.5 w-3.5 text-[#5A6552]" aria-hidden="true" />
+              )}
+              <span>{soundEffectsEnabled ? 'SFX On' : 'SFX Off'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => startRound()}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-[#5A6552] hover:text-[#1F2718] cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <Shuffle className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>New Random Round</span>
+            </button>
+          </div>
         </div>
 
         {/* Session Completion Progress Bar */}
@@ -1025,7 +1146,7 @@ export function QuizMode({
       </div>
 
       {/* Random Flashcard Question Card */}
-      <div className="rounded-2xl border border-[#DCE5D3] bg-white p-6 sm:p-8 shadow-sm space-y-6">
+      <div className="relative overflow-hidden rounded-2xl border border-[#DCE5D3] bg-white p-6 sm:p-8 shadow-sm space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#5A6552]">
           <span className="inline-flex items-center gap-1.5 font-semibold text-[#9A6F14]">
             {currentQuestion.kind === 'multiple_choice' ? (
@@ -1442,6 +1563,7 @@ export function QuizMode({
             )}
           </p>
         )}
+        <QuizConfettiOverlay burst={confettiBurst} />
       </div>
     </div>
   );

@@ -14,11 +14,10 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         manifestFilename: 'manifest.json',
         includeAssets: [
-          'icon.svg',
+          'icon.jpg',
           'apple-touch-icon.png',
-          'pwa-192x192.png',
-          'pwa-512x512.png',
-          'pwa-maskable-512x512.png',
+          'pwa-512x512.jpg',
+          'pwa-maskable-512x512.jpg',
         ],
         manifest: {
           id: '/',
@@ -32,38 +31,26 @@ export default defineConfig(() => {
           scope: '/',
           display: 'standalone',
           orientation: 'any',
-          theme_color: '#2D3B22',
-          background_color: '#FAFBF8',
+          theme_color: '#044712',
+          background_color: '#044712',
           categories: ['education', 'books'],
           icons: [
             {
-              src: '/pwa-192x192.png',
-              sizes: '192x192',
-              type: 'image/png',
+              src: '/pwa-512x512.jpg',
+              sizes: '512x512',
+              type: 'image/jpeg',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: '/pwa-maskable-512x512.jpg',
               sizes: '512x512',
-              type: 'image/png',
-              purpose: 'any',
-            },
-            {
-              src: '/pwa-maskable-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
+              type: 'image/jpeg',
               purpose: 'maskable',
-            },
-            {
-              src: '/icon.svg',
-              sizes: 'any',
-              type: 'image/svg+xml',
-              purpose: 'any',
             },
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,jpg,svg,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           runtimeCaching: [
             {

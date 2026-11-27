@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
+  BookOpen,
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   Crown,
   Feather,
   Flame,
+  GraduationCap,
   History,
+  Layers,
+  LayoutGrid,
   LogIn,
   LogOut,
+  MessageSquare,
   Minus,
   NotebookPen,
   Plus,
@@ -15,6 +22,7 @@ import {
   ShieldCheck,
   Target,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { ActiveTab, AuthUser, ProficiencyLevel, VocabCard } from '../types/arabic';
 import { getUserInitials, isAdminUser, isPrimaryOwnerEmail } from '../utils/auth';
@@ -59,6 +67,8 @@ interface NavbarProps {
   vocabCards: VocabCard[];
   todayLog?: DailyStudyLog;
   todayKey: string;
+  isViewingLesson?: boolean;
+  onExitLesson?: () => void;
 }
 
 export function Navbar({
@@ -85,10 +95,13 @@ export function Navbar({
   vocabCards,
   todayLog,
   todayKey,
+  isViewingLesson = false,
+  onExitLesson,
 }: NavbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [goalPopoverOpen, setGoalPopoverOpen] = useState(false);
   const [levelMenuOpen, setLevelMenuOpen] = useState(false);
+  const [bottomMenuOpen, setBottomMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -100,6 +113,8 @@ export function Navbar({
   const levelRef = useRef<HTMLDivElement>(null);
   const mobileLevelDropdownRef = useRef<HTMLDivElement>(null);
   const mobileLevelTriggerRef = useRef<HTMLButtonElement>(null);
+  const bottomMenuRef = useRef<HTMLDivElement>(null);
+  const bottomBarRef = useRef<HTMLDivElement>(null);
 
   const activeLevelInfo =
     NAVBAR_LEVEL_META.find((item) => item.level === selectedLevel) ?? NAVBAR_LEVEL_META[0];
@@ -133,7 +148,15 @@ export function Navbar({
   }, []);
 
   useEffect(() => {
-    if (!menuOpen && !statusNoteOpen && !goalPopoverOpen && !levelMenuOpen) return;
+    if (!isViewingLesson) {
+      setBottomMenuOpen(false);
+    }
+  }, [isViewingLesson]);
+
+  useEffect(() => {
+    if (!menuOpen && !statusNoteOpen && !goalPopoverOpen && !levelMenuOpen && !bottomMenuOpen) {
+      return;
+    }
     const handleOutside = (e: MouseEvent) => {
       const target = e.target as Node;
       if (menuRef.current && !menuRef.current.contains(target)) {
@@ -151,6 +174,11 @@ export function Navbar({
       if (!inDesktopLevel && !inMobileDropdown && !inMobileTrigger) {
         setLevelMenuOpen(false);
       }
+      const inBottomMenu = bottomMenuRef.current?.contains(target);
+      const inBottomBar = bottomBarRef.current?.contains(target);
+      if (!inBottomMenu && !inBottomBar) {
+        setBottomMenuOpen(false);
+      }
     };
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -158,6 +186,7 @@ export function Navbar({
         setGoalPopoverOpen(false);
         setStatusNoteOpen(false);
         setLevelMenuOpen(false);
+        setBottomMenuOpen(false);
       }
     };
     window.addEventListener('mousedown', handleOutside);
@@ -166,7 +195,7 @@ export function Navbar({
       window.removeEventListener('mousedown', handleOutside);
       window.removeEventListener('keydown', handleEscape);
     };
-  }, [menuOpen, statusNoteOpen, goalPopoverOpen, levelMenuOpen]);
+  }, [menuOpen, statusNoteOpen, goalPopoverOpen, levelMenuOpen, bottomMenuOpen]);
 
   const isLessonsActive =
     activeTab === 'lessons' ||
@@ -251,11 +280,16 @@ export function Navbar({
   }
 
   return (
-    <header
-      dir="ltr"
-      className="sticky top-0 z-40 pt-[env(safe-area-inset-top)] border-b border-[#3E522D]/80 bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#FAFBF8] shadow-[0_4px_20px_-6px_rgba(36,48,27,0.45)]"
-    >
-      <div className="mx-auto flex h-14 sm:h-16 max-w-7xl items-center justify-between gap-2 sm:gap-4 px-2.5 sm:px-5 lg:px-8">
+    <>
+      <header
+        dir="ltr"
+        className="sticky top-0 z-40 pt-[env(safe-area-inset-top)] border-b border-[#3E522D]/80 bg-[linear-gradient(135deg,#24301B_0%,#3E522D_100%)] text-[#FAFBF8] shadow-[0_4px_20px_-6px_rgba(36,48,27,0.45)]"
+      >
+        <div
+          className={`mx-auto flex max-w-7xl items-center justify-between gap-2 sm:gap-4 px-2.5 sm:px-5 lg:px-8 ${
+            isViewingLesson ? 'h-12 md:h-16' : 'h-14 sm:h-16'
+          }`}
+        >
         {/* Left Zone: User Menu + High-Contrast "الهدف اليومي" Badge + PWA + Connection */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Account Menu */}
@@ -591,7 +625,9 @@ export function Navbar({
               type="button"
               onClick={onOpenUserManagement}
               title="لوحة الإدارة والفحص الذكي · Admin Panel"
-              className="inline-flex items-center gap-1.5 rounded-full border border-[#FACC15]/60 bg-[#16200F] px-2.5 py-1.5 text-xs font-bold text-[#FEF08A] hover:bg-[#233018] hover:border-[#FACC15] transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15]"
+              className={`${
+                isViewingLesson ? 'hidden md:inline-flex' : 'inline-flex'
+              } items-center gap-1.5 rounded-full border border-[#FACC15]/60 bg-[#16200F] px-2.5 py-1.5 text-xs font-bold text-[#FEF08A] hover:bg-[#233018] hover:border-[#FACC15] transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FACC15]`}
             >
               <ShieldCheck className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
               <span dir="rtl" lang="ar" className="font-arabic-cairo">
@@ -601,7 +637,12 @@ export function Navbar({
             </button>
           )}
 
-          <PWAInstallButton variant="header" />
+          {!isViewingLesson && <PWAInstallButton variant="header" />}
+          {isViewingLesson && (
+            <div className="hidden md:block">
+              <PWAInstallButton variant="header" />
+            </div>
+          )}
 
           {/* Subtle Connection Status Dot */}
           <div className="relative hidden md:flex items-center" ref={statusRef}>
@@ -887,101 +928,103 @@ export function Navbar({
         </button>
       </div>
 
-      {/* Responsive Mobile & Narrow-Screen Navigation Sub-Row (all 5 tabs cleanly visible without clipping) */}
-      <nav
-        aria-label="Mobile navigation"
-        className="flex md:hidden items-center justify-between gap-1 border-t border-white/10 bg-[#16200F]/85 px-2.5 overflow-x-auto touch-pan-x no-scrollbar text-xs font-medium"
-      >
-        <div className="relative flex items-center gap-1 shrink-0">
+      {/* Responsive Mobile & Narrow-Screen Top Sub-Row (collapsed into bottom-anchored menu when reading a lesson) */}
+      {!isViewingLesson && (
+        <nav
+          aria-label="Mobile navigation"
+          className="flex md:hidden items-center justify-between gap-1 border-t border-white/10 bg-[#16200F]/85 px-2.5 overflow-x-auto touch-pan-x no-scrollbar text-xs font-medium"
+        >
+          <div className="relative flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => onSelectTab('lessons')}
+              className={`relative py-2 px-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation flex flex-col items-center leading-tight ${
+                isLessonsActive
+                  ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
+                  : 'text-[#DCE5D3] hover:text-white'
+              }`}
+            >
+              <span className="font-arabic-cairo">الدروس</span>
+              <span className="text-[10px] font-bold text-[#FACC15] leading-none mt-0.5">
+                {activeLevelInfo.ar}
+              </span>
+            </button>
+
+            <button
+              ref={mobileLevelTriggerRef}
+              type="button"
+              onClick={() => setLevelMenuOpen((prev) => !prev)}
+              aria-expanded={levelMenuOpen}
+              aria-label={`Switch level (current: ${activeLevelInfo.ar})`}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#FACC15]/45 bg-[#24301B] text-[#FACC15] cursor-pointer touch-manipulation"
+            >
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                  levelMenuOpen ? 'rotate-180' : ''
+                }`}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+
           <button
             type="button"
-            onClick={() => onSelectTab('lessons')}
-            className={`relative py-2 px-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation flex flex-col items-center leading-tight ${
-              isLessonsActive
+            onClick={() => onSelectTab('vocabulary')}
+            className={`relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
+              isVocabActive
                 ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
                 : 'text-[#DCE5D3] hover:text-white'
             }`}
           >
-            <span className="font-arabic-cairo">الدروس</span>
-            <span className="text-[10px] font-bold text-[#FACC15] leading-none mt-0.5">
-              {activeLevelInfo.ar}
-            </span>
+            <span className="font-arabic-cairo">مفرداتي</span>
+            {vocabCount > 0 && (
+              <span className="ml-1 font-mono text-[10px] tabular-nums text-[#FACC15] font-semibold">
+                ({vocabCount})
+              </span>
+            )}
           </button>
 
           <button
-            ref={mobileLevelTriggerRef}
             type="button"
-            onClick={() => setLevelMenuOpen((prev) => !prev)}
-            aria-expanded={levelMenuOpen}
-            aria-label={`Switch level (current: ${activeLevelInfo.ar})`}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#FACC15]/45 bg-[#24301B] text-[#FACC15] cursor-pointer touch-manipulation"
+            onClick={() => onSelectTab('exams')}
+            className={`relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
+              isExamsActive
+                ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
+                : 'text-[#DCE5D3] hover:text-white'
+            }`}
           >
-            <ChevronDown
-              className={`h-3.5 w-3.5 transition-transform duration-150 ${
-                levelMenuOpen ? 'rotate-180' : ''
-              }`}
-              aria-hidden="true"
-            />
+            <span className="font-arabic-cairo">الامتحانات</span>
           </button>
-        </div>
 
-        <button
-          type="button"
-          onClick={() => onSelectTab('vocabulary')}
-          className={`relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
-            isVocabActive
-              ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
-              : 'text-[#DCE5D3] hover:text-white'
-          }`}
-        >
-          <span className="font-arabic-cairo">مفرداتي</span>
-          {vocabCount > 0 && (
-            <span className="ml-1 font-mono text-[10px] tabular-nums text-[#FACC15] font-semibold">
-              ({vocabCount})
-            </span>
-          )}
-        </button>
+          <button
+            type="button"
+            onClick={() => onSelectTab('conversation')}
+            className={`relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
+              isConversationActive
+                ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
+                : 'text-[#DCE5D3] hover:text-white'
+            }`}
+          >
+            <span className="font-arabic-cairo">المحادثة</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => onSelectTab('exams')}
-          className={`relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
-            isExamsActive
-              ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
-              : 'text-[#DCE5D3] hover:text-white'
-          }`}
-        >
-          <span className="font-arabic-cairo">الامتحانات</span>
-        </button>
+          <button
+            type="button"
+            onClick={onOpenNotes}
+            className="relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation text-[#DCE5D3] hover:text-white"
+          >
+            <span className="font-arabic-cairo">ملاحظاتي</span>
+            {notesCount > 0 && (
+              <span className="ml-1 font-mono text-[10px] tabular-nums text-[#FACC15] font-semibold">
+                ({notesCount})
+              </span>
+            )}
+          </button>
+        </nav>
+      )}
 
-        <button
-          type="button"
-          onClick={() => onSelectTab('conversation')}
-          className={`relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
-            isConversationActive
-              ? 'text-[#FEF08A] font-bold after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:bg-[#FACC15]'
-              : 'text-[#DCE5D3] hover:text-white'
-          }`}
-        >
-          <span className="font-arabic-cairo">المحادثة</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenNotes}
-          className="relative py-2.5 px-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation text-[#DCE5D3] hover:text-white"
-        >
-          <span className="font-arabic-cairo">ملاحظاتي</span>
-          {notesCount > 0 && (
-            <span className="ml-1 font-mono text-[10px] tabular-nums text-[#FACC15] font-semibold">
-              ({notesCount})
-            </span>
-          )}
-        </button>
-      </nav>
-
-      {/* Mobile Non-Clipped Level Switcher Popover */}
-      {levelMenuOpen && (
+      {/* Mobile Non-Clipped Level Switcher Popover (when not in bottom-anchored lesson mode) */}
+      {!isViewingLesson && levelMenuOpen && (
         <div
           ref={mobileLevelDropdownRef}
           role="menu"
@@ -1029,5 +1072,245 @@ export function Navbar({
         </div>
       )}
     </header>
+
+    {/* Mobile Bottom-Anchored Navigation Menu when viewing a lesson (maximizes reading space) */}
+    {isViewingLesson && (
+      <>
+        {bottomMenuOpen && (
+          <div
+            aria-hidden="true"
+            onClick={() => setBottomMenuOpen(false)}
+            className="fixed inset-0 z-30 bg-[#182111]/45 backdrop-blur-[1px] md:hidden"
+          />
+        )}
+
+        {bottomMenuOpen && (
+          <div
+            ref={bottomMenuRef}
+            role="dialog"
+            aria-label="Mobile lesson navigation menu"
+            dir="ltr"
+            className="animate-popover-in fixed inset-x-3 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-40 md:hidden rounded-2xl border border-[#3E522D] bg-[#24301B] p-3 text-[#FAFBF8] shadow-2xl space-y-3"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-2 px-1">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[#FEF08A]">
+                <LayoutGrid className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+                <span className="font-arabic-cairo">التنقّل السريع</span>
+                <span className="text-[#DCE5D3]/75 font-sans">· Quick Menu</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBottomMenuOpen(false)}
+                aria-label="Close navigation menu"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#DCE5D3] hover:bg-white/10 hover:text-white cursor-pointer touch-manipulation"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* Secondary Navigation Items */}
+            <nav aria-label="Secondary lesson navigation" className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setBottomMenuOpen(false);
+                  onSelectTab('vocabulary');
+                }}
+                className="flex min-h-[44px] items-center justify-between gap-2 rounded-xl border border-white/12 bg-[#16200F]/70 px-3 py-2 text-left text-xs font-semibold text-[#FAFBF8] hover:border-[#FACC15]/60 hover:bg-[#3B4D2B]/70 transition-colors cursor-pointer touch-manipulation"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <Layers className="h-4 w-4 shrink-0 text-[#FACC15]" aria-hidden="true" />
+                  <span className="truncate font-arabic-cairo">مفرداتي · Vocab</span>
+                </span>
+                {vocabCount > 0 && (
+                  <span className="font-mono text-[11px] font-bold text-[#FACC15] tabular-nums shrink-0">
+                    {vocabCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setBottomMenuOpen(false);
+                  onSelectTab('exams');
+                }}
+                className="flex min-h-[44px] items-center gap-2 rounded-xl border border-white/12 bg-[#16200F]/70 px-3 py-2 text-left text-xs font-semibold text-[#FAFBF8] hover:border-[#FACC15]/60 hover:bg-[#3B4D2B]/70 transition-colors cursor-pointer touch-manipulation"
+              >
+                <GraduationCap className="h-4 w-4 shrink-0 text-[#FACC15]" aria-hidden="true" />
+                <span className="truncate font-arabic-cairo">الامتحانات · Exams</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setBottomMenuOpen(false);
+                  onSelectTab('conversation');
+                }}
+                className="flex min-h-[44px] items-center gap-2 rounded-xl border border-white/12 bg-[#16200F]/70 px-3 py-2 text-left text-xs font-semibold text-[#FAFBF8] hover:border-[#FACC15]/60 hover:bg-[#3B4D2B]/70 transition-colors cursor-pointer touch-manipulation"
+              >
+                <MessageSquare className="h-4 w-4 shrink-0 text-[#FACC15]" aria-hidden="true" />
+                <span className="truncate font-arabic-cairo">المحادثة · Chat</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setBottomMenuOpen(false);
+                  onOpenNotes();
+                }}
+                className="flex min-h-[44px] items-center justify-between gap-2 rounded-xl border border-white/12 bg-[#16200F]/70 px-3 py-2 text-left text-xs font-semibold text-[#FAFBF8] hover:border-[#FACC15]/60 hover:bg-[#3B4D2B]/70 transition-colors cursor-pointer touch-manipulation"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <NotebookPen className="h-4 w-4 shrink-0 text-[#FACC15]" aria-hidden="true" />
+                  <span className="truncate font-arabic-cairo">ملاحظاتي · Notes</span>
+                </span>
+                {notesCount > 0 && (
+                  <span className="font-mono text-[11px] font-bold text-[#FACC15] tabular-nums shrink-0">
+                    {notesCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setBottomMenuOpen(false);
+                  onSelectHistory();
+                }}
+                className="flex min-h-[44px] items-center gap-2 rounded-xl border border-white/12 bg-[#16200F]/70 px-3 py-2 text-left text-xs font-semibold text-[#FAFBF8] hover:border-[#FACC15]/60 hover:bg-[#3B4D2B]/70 transition-colors cursor-pointer touch-manipulation"
+              >
+                <History className="h-4 w-4 shrink-0 text-[#DCE5D3]" aria-hidden="true" />
+                <span className="truncate">History · السجل</span>
+              </button>
+
+              {isAdminUser(currentUser) && onOpenUserManagement && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBottomMenuOpen(false);
+                    onOpenUserManagement();
+                  }}
+                  className="flex min-h-[44px] items-center justify-between gap-2 rounded-xl border border-[#FACC15]/40 bg-[#16200F] px-3 py-2 text-left text-xs font-bold text-[#FEF08A] hover:bg-[#3B4D2B] transition-colors cursor-pointer touch-manipulation"
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-[#FACC15]" aria-hidden="true" />
+                    <span className="truncate font-arabic-cairo">الإدارة · Admin</span>
+                  </span>
+                  {pendingDraftsCount > 0 && (
+                    <span className="font-mono text-[10px] font-bold text-[#FACC15] tabular-nums shrink-0">
+                      {pendingDraftsCount}
+                    </span>
+                  )}
+                </button>
+              )}
+            </nav>
+
+            {/* Level Switcher */}
+            <div className="border-t border-white/10 pt-2.5 space-y-1.5">
+              <p className="px-1 text-[11px] font-medium text-[#DCE5D3]/85">
+                اختر المستوى · Switch Lesson Level
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {NAVBAR_LEVEL_META.map((item) => {
+                  const isSelected = selectedLevel === item.level;
+                  const count = levelCounts?.[item.level];
+                  return (
+                    <button
+                      key={item.level}
+                      type="button"
+                      onClick={() => {
+                        onSelectLevel(item.level);
+                        onSelectTab('lessons');
+                        setBottomMenuOpen(false);
+                      }}
+                      className={`flex min-h-[44px] flex-col items-center justify-center rounded-xl border px-2 py-1.5 text-center transition-colors cursor-pointer touch-manipulation ${
+                        isSelected
+                          ? 'border-[#FACC15] bg-[#3B4D2B] text-white'
+                          : 'border-white/15 bg-[#16200F]/60 text-[#DCE5D3] hover:bg-white/10'
+                      }`}
+                    >
+                      <span
+                        dir="rtl"
+                        lang="ar"
+                        className={`font-arabic-cairo text-xs font-bold ${
+                          isSelected ? 'text-[#FACC15]' : 'text-white'
+                        }`}
+                      >
+                        {item.ar}
+                      </span>
+                      <span className="text-[10px] font-medium opacity-85">
+                        {item.en}
+                        {typeof count === 'number' ? ` (${count})` : ''}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Slim Bottom-Anchored Dock Bar */}
+        <div
+          ref={bottomBarRef}
+          dir="ltr"
+          className="fixed bottom-0 inset-x-0 z-30 md:hidden border-t border-[#3E522D]/90 bg-[#16200F]/95 backdrop-blur-md text-[#FAFBF8] pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_24px_-8px_rgba(16,24,10,0.55)]"
+        >
+          <div className="mx-auto flex h-12 max-w-lg items-center justify-between gap-2 px-3">
+            <button
+              type="button"
+              onClick={() => {
+                setBottomMenuOpen(false);
+                if (onExitLesson) {
+                  onExitLesson();
+                } else {
+                  onSelectTab('lessons');
+                }
+              }}
+              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-[#DCE5D3] hover:bg-white/10 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation"
+            >
+              <ArrowLeft className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+              <BookOpen className="h-3.5 w-3.5 text-[#DCE5D3]" aria-hidden="true" />
+              <span className="font-arabic-cairo">الدروس</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setBottomMenuOpen((prev) => !prev)}
+              aria-expanded={bottomMenuOpen}
+              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-white/15 bg-[#24301B]/80 px-3 py-1 text-xs font-semibold text-[#FEF08A] hover:border-[#FACC15]/50 transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation"
+            >
+              <span className="text-[11px] text-[#DCE5D3]/80">المستوى:</span>
+              <span dir="rtl" lang="ar" className="font-arabic-cairo font-bold text-[#FACC15]">
+                {activeLevelInfo.ar}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setBottomMenuOpen((prev) => !prev)}
+              aria-expanded={bottomMenuOpen}
+              aria-label="Toggle lesson navigation menu"
+              className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation ${
+                bottomMenuOpen
+                  ? 'border-[#FACC15] bg-[#3B4D2B] text-[#FACC15]'
+                  : 'border-[#FACC15]/50 bg-[#24301B] text-[#FEF08A] hover:border-[#FACC15]'
+              }`}
+            >
+              <LayoutGrid className="h-3.5 w-3.5 text-[#FACC15]" aria-hidden="true" />
+              <span className="font-arabic-cairo">القائمة</span>
+              <ChevronUp
+                className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                  bottomMenuOpen ? 'rotate-180' : ''
+                }`}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+        </div>
+      </>
+    )}
+    </>
   );
 }

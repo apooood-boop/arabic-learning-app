@@ -1530,6 +1530,103 @@ export function unlockArabicAudioContext(): void {
   }
 }
 
+function scheduleQuizTone(ctx: AudioContext, kind: 'success' | 'error'): void {
+  try {
+    const now = ctx.currentTime;
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(1, now);
+    masterGain.connect(ctx.destination);
+
+    if (kind === 'success') {
+      // Subtle, warm ascending two-note sine chime (C5 -> E5)
+      const notes = [
+        { freq: 523.25, start: 0, duration: 0.14, peak: 0.065 },
+        { freq: 659.25, start: 0.075, duration: 0.22, peak: 0.075 },
+      ];
+      for (const note of notes) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(note.freq, now + note.start);
+
+        gain.gain.setValueAtTime(0.0001, now + note.start);
+        gain.gain.linearRampToValueAtTime(note.peak, now + note.start + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + note.start + note.duration);
+
+        osc.connect(gain);
+        gain.connect(masterGain);
+        osc.start(now + note.start);
+        osc.stop(now + note.start + note.duration + 0.02);
+        osc.onended = () => {
+          osc.disconnect();
+          gain.disconnect();
+        };
+      }
+    } else {
+      // Soft, muted descending two-note lowpass-filtered triangle nudge (D4 -> A3)
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(620, now);
+      filter.connect(masterGain);
+
+      const notes = [
+        { freq: 277.18, start: 0, duration: 0.11, peak: 0.06 },
+        { freq: 220.0, start: 0.085, duration: 0.16, peak: 0.055 },
+      ];
+      for (const note of notes) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(note.freq, now + note.start);
+
+        gain.gain.setValueAtTime(0.0001, now + note.start);
+        gain.gain.linearRampToValueAtTime(note.peak, now + note.start + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + note.start + note.duration);
+
+        osc.connect(gain);
+        gain.connect(filter);
+        osc.start(now + note.start);
+        osc.stop(now + note.start + note.duration + 0.02);
+        osc.onended = () => {
+          osc.disconnect();
+          gain.disconnect();
+        };
+      }
+    }
+  } catch {
+    // Non-fatal if browser blocks Web Audio synthesis
+  }
+}
+
+/**
+ * Plays a subtle Web Audio API feedback chime on quiz answer submission.
+ * Reuses the shared AudioContext unlocked by user gestures.
+ */
+export function playQuizFeedbackSound(kind: 'success' | 'error'): void {
+  if (typeof window === 'undefined') return;
+  try {
+    unlockArabicAudioContext();
+    const ctx = getOrCreateAudioContext();
+    if (!ctx) return;
+
+    if (ctx.state === 'suspended') {
+      void ctx
+        .resume()
+        .then(() => {
+          scheduleQuizTone(ctx, kind);
+        })
+        .catch(() => {
+          // Ignore autoplay restriction errors
+        });
+      return;
+    }
+
+    scheduleQuizTone(ctx, kind);
+  } catch {
+    // Non-fatal
+  }
+}
+
 function decodeBase64AudioToWavBuffer(base64Data: string, mimeType?: string): ArrayBuffer {
   const binary = window.atob(base64Data);
   const rawBytes = new Uint8Array(binary.length);

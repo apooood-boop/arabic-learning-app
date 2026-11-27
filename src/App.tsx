@@ -1899,6 +1899,7 @@ export default function App() {
 
   const activeWordKey = wordSelection ? normalizeArabicWord(wordSelection.word) : null;
   const isCurrentWordSaved = activeWordKey ? vocabStatusMap.has(activeWordKey) : false;
+  const isViewingLesson = Boolean(currentUser && activeTab === 'lessons' && activeLesson);
 
   return (
     <div
@@ -1942,6 +1943,13 @@ export default function App() {
         vocabCards={vocabCards}
         todayLog={dailyLogs[todayKey]}
         todayKey={todayKey}
+        isViewingLesson={isViewingLesson}
+        onExitLesson={() => {
+          setActiveLessonId(null);
+          setActiveNavSection('home');
+          setWordSelection(null);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
       />
 
       {!currentUser ? (
@@ -2030,7 +2038,13 @@ export default function App() {
             </div>
           )}
 
-          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+          <main
+            className={`mx-auto w-full max-w-6xl flex-1 ${
+              isViewingLesson
+                ? 'px-3 py-4 pb-20 sm:px-6 sm:py-8 md:pb-10 lg:px-8'
+                : 'px-4 py-8 sm:px-6 sm:py-10 lg:px-8'
+            }`}
+          >
         {activeTab === 'lessons' && (
           <>
             {activeLesson ? (
@@ -2620,7 +2634,11 @@ export default function App() {
         )}
       </main>
 
-      <footer className="border-t border-[#DCE5D3] bg-white/95 py-5 mt-12">
+      <footer
+        className={`border-t border-[#DCE5D3] bg-white/95 py-5 mt-12 ${
+          isViewingLesson ? 'pb-20 md:pb-5' : ''
+        }`}
+      >
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 text-xs text-[#5A6552] sm:px-6 lg:px-8">
           <div className="space-y-0.5">
             <p className="font-medium text-[#1F2718]">

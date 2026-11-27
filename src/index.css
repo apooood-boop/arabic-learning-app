@@ -264,6 +264,80 @@ input,
   animation: cardSlidePrev 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* Lightweight CSS-only Quiz Confetti Overlay */
+@keyframes quizConfettiFall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) rotate(0deg) scale(0.75);
+  }
+  14% {
+    opacity: 0.92;
+    transform: translate3d(calc(var(--confetti-x, 0px) * 0.25), 14px, 0) rotate(calc(var(--confetti-rot, 180deg) * 0.25)) scale(1);
+  }
+  78% {
+    opacity: 0.82;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--confetti-x, 0px), var(--confetti-y, 175px), 0) rotate(var(--confetti-rot, 240deg)) scale(0.82);
+  }
+}
+
+.quiz-confetti-piece {
+  position: absolute;
+  top: 0;
+  width: 7px;
+  height: 11px;
+  border-radius: 2px;
+  pointer-events: none;
+  will-change: transform, opacity;
+  animation-name: quizConfettiFall;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+  animation-fill-mode: both;
+}
+
+.quiz-confetti-layer--answer .quiz-confetti-piece {
+  --confetti-y: 155px;
+  animation-duration: 1.05s;
+}
+
+.quiz-confetti-layer--complete .quiz-confetti-piece {
+  --confetti-y: 265px;
+  animation-duration: 1.85s;
+}
+
+.quiz-confetti-piece:nth-child(6n + 1) { background-color: #FACC15; }
+.quiz-confetti-piece:nth-child(6n + 2) { background-color: #2D3B22; }
+.quiz-confetti-piece:nth-child(6n + 3) { background-color: #D4A338; width: 6px; height: 6px; border-radius: 9999px; }
+.quiz-confetti-piece:nth-child(6n + 4) { background-color: #4A6138; }
+.quiz-confetti-piece:nth-child(6n + 5) { background-color: #84A96C; width: 8px; height: 6px; }
+.quiz-confetti-piece:nth-child(6n)     { background-color: #E8B948; }
+
+.quiz-confetti-piece:nth-child(1)  { left: 8%;  --confetti-x: -18px; --confetti-rot: 210deg; animation-delay: 0ms; }
+.quiz-confetti-piece:nth-child(2)  { left: 14%; --confetti-x: 16px;  --confetti-rot: -190deg; animation-delay: 60ms; }
+.quiz-confetti-piece:nth-child(3)  { left: 20%; --confetti-x: -14px; --confetti-rot: 260deg; animation-delay: 30ms; }
+.quiz-confetti-piece:nth-child(4)  { left: 26%; --confetti-x: 22px;  --confetti-rot: -240deg; animation-delay: 90ms; }
+.quiz-confetti-piece:nth-child(5)  { left: 32%; --confetti-x: -20px; --confetti-rot: 185deg; animation-delay: 20ms; }
+.quiz-confetti-piece:nth-child(6)  { left: 38%; --confetti-x: 14px;  --confetti-rot: -215deg; animation-delay: 110ms; }
+.quiz-confetti-piece:nth-child(7)  { left: 44%; --confetti-x: -12px; --confetti-rot: 250deg; animation-delay: 45ms; }
+.quiz-confetti-piece:nth-child(8)  { left: 50%; --confetti-x: 18px;  --confetti-rot: -195deg; animation-delay: 15ms; }
+.quiz-confetti-piece:nth-child(9)  { left: 56%; --confetti-x: -16px; --confetti-rot: 220deg; animation-delay: 80ms; }
+.quiz-confetti-piece:nth-child(10) { left: 62%; --confetti-x: 20px;  --confetti-rot: -255deg; animation-delay: 35ms; }
+.quiz-confetti-piece:nth-child(11) { left: 68%; --confetti-x: -22px; --confetti-rot: 195deg; animation-delay: 100ms; }
+.quiz-confetti-piece:nth-child(12) { left: 74%; --confetti-x: 15px;  --confetti-rot: -225deg; animation-delay: 55ms; }
+.quiz-confetti-piece:nth-child(13) { left: 80%; --confetti-x: -14px; --confetti-rot: 245deg; animation-delay: 120ms; }
+.quiz-confetti-piece:nth-child(14) { left: 86%; --confetti-x: 18px;  --confetti-rot: -180deg; animation-delay: 25ms; }
+.quiz-confetti-piece:nth-child(15) { left: 92%; --confetti-x: -16px; --confetti-rot: 230deg; animation-delay: 70ms; }
+.quiz-confetti-piece:nth-child(16) { left: 11%; --confetti-x: 24px;  --confetti-rot: -270deg; animation-delay: 160ms; }
+.quiz-confetti-piece:nth-child(17) { left: 23%; --confetti-x: -24px; --confetti-rot: 275deg; animation-delay: 190ms; }
+.quiz-confetti-piece:nth-child(18) { left: 35%; --confetti-x: 20px;  --confetti-rot: -220deg; animation-delay: 145ms; }
+.quiz-confetti-piece:nth-child(19) { left: 47%; --confetti-x: -18px; --confetti-rot: 240deg; animation-delay: 210ms; }
+.quiz-confetti-piece:nth-child(20) { left: 59%; --confetti-x: 22px;  --confetti-rot: -260deg; animation-delay: 175ms; }
+.quiz-confetti-piece:nth-child(21) { left: 71%; --confetti-x: -20px; --confetti-rot: 205deg; animation-delay: 230ms; }
+.quiz-confetti-piece:nth-child(22) { left: 83%; --confetti-x: 16px;  --confetti-rot: -245deg; animation-delay: 155ms; }
+.quiz-confetti-piece:nth-child(23) { left: 90%; --confetti-x: -18px; --confetti-rot: 265deg; animation-delay: 200ms; }
+.quiz-confetti-piece:nth-child(24) { left: 17%; --confetti-x: 14px;  --confetti-rot: -205deg; animation-delay: 240ms; }
+
 /* Tactile Illuminated Switch-Style Hero Action Buttons */
 .qalam-switch-btn {
   position: relative;
@@ -346,5 +420,9 @@ input,
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-delay: 0ms !important;
+  }
+
+  .quiz-confetti-piece {
+    display: none !important;
   }
 }
